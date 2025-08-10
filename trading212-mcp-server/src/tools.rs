@@ -13,6 +13,66 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config::Trading212Config, errors::Trading212Error};
 
+/// Make a single HTTP request to the Trading212 API.
+/// 
+/// This is a shared function used by all tools to avoid code duplication.
+async fn make_api_request<T>(
+    client: &Client,
+    api_key: &str,
+    url: &str,
+) -> Result<T, Trading212Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let response = client
+        .get(url)
+        .header("Authorization", api_key)
+        .send()
+        .await
+        .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
+
+    let status = response.status();
+    tracing::debug!(
+        status_code = status.as_u16(),
+        url = url,
+        "Received API response"
+    );
+
+    if status == reqwest::StatusCode::OK {
+        let response_text = response.text().await.map_err(|e| {
+            Trading212Error::request_failed(format!("Failed to read response body: {e}"))
+        })?;
+
+        tracing::debug!(
+            response_body = %response_text,
+            response_length = response_text.len(),
+            "Raw API response received"
+        );
+
+        serde_json::from_str::<T>(&response_text).map_err(|e| {
+            tracing::error!(
+                response_body = %response_text,
+                parse_error = %e,
+                "Failed to parse JSON response"
+            );
+            Trading212Error::parse_error(format!(
+                "Failed to parse JSON response: {e}. Response body: {response_text}"
+            ))
+        })
+    } else {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        tracing::error!(
+            status_code = status.as_u16(),
+            response_body = %error_text,
+            "API returned non-success status"
+        );
+        Err(Trading212Error::api_error(status.as_u16(), error_text))
+    }
+}
+
 /// Represents a tradeable instrument from Trading212.
 ///
 /// Contains all the metadata associated with a financial instrument
@@ -184,9 +244,7 @@ impl GetInstrumentsTool {
             url.push_str(&params.join("&"));
         }
 
-        match self
-            .make_request::<Vec<Instrument>>(client, &config.api_key, &url)
-            .await
+        match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await
         {
             Ok(instruments) => {
                 let json_result = serde_json::to_string_pretty(&instruments).map_err(|e| {
@@ -212,64 +270,6 @@ impl GetInstrumentsTool {
         }
     }
 
-    /// Make a single HTTP request to the Trading212 API.
-    async fn make_request<T>(
-        &self,
-        client: &Client,
-        api_key: &str,
-        url: &str,
-    ) -> Result<T, Trading212Error>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let response = client
-            .get(url)
-            .header("Authorization", api_key)
-            .send()
-            .await
-            .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
-
-        let status = response.status();
-        tracing::debug!(
-            status_code = status.as_u16(),
-            url = url,
-            "Received API response"
-        );
-
-        if status == reqwest::StatusCode::OK {
-            let response_text = response.text().await.map_err(|e| {
-                Trading212Error::request_failed(format!("Failed to read response body: {e}"))
-            })?;
-
-            tracing::debug!(
-                response_body = %response_text,
-                response_length = response_text.len(),
-                "Raw API response received"
-            );
-
-            serde_json::from_str::<T>(&response_text).map_err(|e| {
-                tracing::error!(
-                    response_body = %response_text,
-                    parse_error = %e,
-                    "Failed to parse JSON response"
-                );
-                Trading212Error::parse_error(format!(
-                    "Failed to parse JSON response: {e}. Response body: {response_text}"
-                ))
-            })
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            tracing::error!(
-                status_code = status.as_u16(),
-                response_body = %error_text,
-                "API returned non-success status"
-            );
-            Err(Trading212Error::api_error(status.as_u16(), error_text))
-        }
-    }
 }
 
 impl GetPiesTool {
@@ -295,9 +295,7 @@ impl GetPiesTool {
 
         let url = config.endpoint_url("equity/pies");
 
-        match self
-            .make_request::<Vec<Pie>>(client, &config.api_key, &url)
-            .await
+        match make_api_request::<Vec<Pie>>(client, &config.api_key, &url).await
         {
             Ok(pies) => {
                 let json_result = serde_json::to_string_pretty(&pies).map_err(|e| {
@@ -320,64 +318,6 @@ impl GetPiesTool {
         }
     }
 
-    /// Make a single HTTP request to the Trading212 API.
-    async fn make_request<T>(
-        &self,
-        client: &Client,
-        api_key: &str,
-        url: &str,
-    ) -> Result<T, Trading212Error>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let response = client
-            .get(url)
-            .header("Authorization", api_key)
-            .send()
-            .await
-            .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
-
-        let status = response.status();
-        tracing::debug!(
-            status_code = status.as_u16(),
-            url = url,
-            "Received API response"
-        );
-
-        if status == reqwest::StatusCode::OK {
-            let response_text = response.text().await.map_err(|e| {
-                Trading212Error::request_failed(format!("Failed to read response body: {e}"))
-            })?;
-
-            tracing::debug!(
-                response_body = %response_text,
-                response_length = response_text.len(),
-                "Raw API response received"
-            );
-
-            serde_json::from_str::<T>(&response_text).map_err(|e| {
-                tracing::error!(
-                    response_body = %response_text,
-                    parse_error = %e,
-                    "Failed to parse JSON response"
-                );
-                Trading212Error::parse_error(format!(
-                    "Failed to parse JSON response: {e}. Response body: {response_text}"
-                ))
-            })
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            tracing::error!(
-                status_code = status.as_u16(),
-                response_body = %error_text,
-                "API returned non-success status"
-            );
-            Err(Trading212Error::api_error(status.as_u16(), error_text))
-        }
-    }
 }
 
 impl GetPieByIdTool {
@@ -403,9 +343,7 @@ impl GetPieByIdTool {
 
         let url = config.endpoint_url(&format!("equity/pies/{}", self.pie_id));
 
-        match self
-            .make_request::<serde_json::Value>(client, &config.api_key, &url)
-            .await
+        match make_api_request::<serde_json::Value>(client, &config.api_key, &url).await
         {
             Ok(pie_detail) => {
                 let json_result = serde_json::to_string_pretty(&pie_detail).map_err(|e| {
@@ -428,64 +366,6 @@ impl GetPieByIdTool {
         }
     }
 
-    /// Make a single HTTP request to the Trading212 API.
-    async fn make_request<T>(
-        &self,
-        client: &Client,
-        api_key: &str,
-        url: &str,
-    ) -> Result<T, Trading212Error>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let response = client
-            .get(url)
-            .header("Authorization", api_key)
-            .send()
-            .await
-            .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
-
-        let status = response.status();
-        tracing::debug!(
-            status_code = status.as_u16(),
-            url = url,
-            "Received API response"
-        );
-
-        if status == reqwest::StatusCode::OK {
-            let response_text = response.text().await.map_err(|e| {
-                Trading212Error::request_failed(format!("Failed to read response body: {e}"))
-            })?;
-
-            tracing::debug!(
-                response_body = %response_text,
-                response_length = response_text.len(),
-                "Raw API response received"
-            );
-
-            serde_json::from_str::<T>(&response_text).map_err(|e| {
-                tracing::error!(
-                    response_body = %response_text,
-                    parse_error = %e,
-                    "Failed to parse JSON response"
-                );
-                Trading212Error::parse_error(format!(
-                    "Failed to parse JSON response: {e}. Response body: {response_text}"
-                ))
-            })
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            tracing::error!(
-                status_code = status.as_u16(),
-                response_body = %error_text,
-                "API returned non-success status"
-            );
-            Err(Trading212Error::api_error(status.as_u16(), error_text))
-        }
-    }
 }
 
 tool_box! {
