@@ -13,6 +13,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config::Trading212Config, errors::Trading212Error};
 
+/// Build URL with query parameters for instrument search.
+fn build_instruments_url(
+    config: &Trading212Config,
+    search: Option<&String>,
+    instrument_type: Option<&String>,
+) -> String {
+    let mut url = config.endpoint_url("equity/metadata/instruments");
+    let mut params = Vec::new();
+
+    if let Some(search) = search {
+        params.push(format!("search={}", urlencoding::encode(search)));
+    }
+    if let Some(t) = instrument_type {
+        params.push(format!("type={}", urlencoding::encode(t)));
+    }
+
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+
+    url
+}
+
 /// Helper function to serialize data and create a formatted MCP text response.
 ///
 /// This centralizes the JSON serialization and result formatting logic used by all tools.
@@ -58,6 +82,50 @@ where
     )]))
 }
 
+/// Process a successful HTTP response and parse JSON.
+async fn process_response<T>(response: reqwest::Response) -> Result<T, Trading212Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let response_text = response.text().await.map_err(|e| {
+        Trading212Error::request_failed(format!("Failed to read response body: {e}"))
+    })?;
+
+    tracing::debug!(
+        response_body = %response_text,
+        response_length = response_text.len(),
+        "Raw API response received"
+    );
+
+    serde_json::from_str::<T>(&response_text).map_err(|e| {
+        tracing::error!(
+            response_body = %response_text,
+            parse_error = %e,
+            "Failed to parse JSON response"
+        );
+        Trading212Error::parse_error(format!(
+            "Failed to parse JSON response: {e}. Response body: {response_text}"
+        ))
+    })
+}
+
+/// Handle an error HTTP response.
+async fn handle_error_response(response: reqwest::Response) -> Trading212Error {
+    let status = response.status();
+    let error_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "Unknown error".to_string());
+
+    tracing::error!(
+        status_code = status.as_u16(),
+        response_body = %error_text,
+        "API returned non-success status"
+    );
+
+    Trading212Error::api_error(status.as_u16(), error_text)
+}
+
 /// Make a single HTTP request to the Trading212 API.
 ///
 /// This is a shared function used by all tools to avoid code duplication.
@@ -84,37 +152,9 @@ where
     );
 
     if status == reqwest::StatusCode::OK {
-        let response_text = response.text().await.map_err(|e| {
-            Trading212Error::request_failed(format!("Failed to read response body: {e}"))
-        })?;
-
-        tracing::debug!(
-            response_body = %response_text,
-            response_length = response_text.len(),
-            "Raw API response received"
-        );
-
-        serde_json::from_str::<T>(&response_text).map_err(|e| {
-            tracing::error!(
-                response_body = %response_text,
-                parse_error = %e,
-                "Failed to parse JSON response"
-            );
-            Trading212Error::parse_error(format!(
-                "Failed to parse JSON response: {e}. Response body: {response_text}"
-            ))
-        })
+        process_response(response).await
     } else {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        tracing::error!(
-            status_code = status.as_u16(),
-            response_body = %error_text,
-            "API returned non-success status"
-        );
-        Err(Trading212Error::api_error(status.as_u16(), error_text))
+        Err(handle_error_response(response).await)
     }
 }
 
@@ -274,20 +314,8 @@ impl GetInstrumentsTool {
             "Executing get_instruments tool"
         );
 
-        let mut url = config.endpoint_url("equity/metadata/instruments");
-
-        let mut params = Vec::new();
-        if let Some(search) = &self.search {
-            params.push(format!("search={}", urlencoding::encode(search)));
-        }
-        if let Some(t) = &self.instrument_type {
-            params.push(format!("type={}", urlencoding::encode(t)));
-        }
-
-        if !params.is_empty() {
-            url.push('?');
-            url.push_str(&params.join("&"));
-        }
+        let url =
+            build_instruments_url(config, self.search.as_ref(), self.instrument_type.as_ref());
 
         match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await {
             Ok(instruments) => {
