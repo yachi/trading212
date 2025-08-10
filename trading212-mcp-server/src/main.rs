@@ -1,5 +1,5 @@
 //! Trading212 MCP Server
-//! 
+//!
 //! A Model Context Protocol (MCP) server that provides access to Trading212 API functionality.
 //! This server enables AI assistants to retrieve information about tradeable instruments
 //! from Trading212's platform through the MCP protocol specification.

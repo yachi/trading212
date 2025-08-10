@@ -5,8 +5,10 @@ A Model Context Protocol (MCP) server that provides access to Trading212 API fun
 ## Features
 
 - **Instrument Retrieval**: Get comprehensive information about tradeable instruments
+- **Investment Pies Analytics**: Access financial performance data for all your Trading212 investment pies
 - **Search & Filtering**: Filter instruments by search terms and instrument types
-- **Retry Logic**: Built-in HTTP retry mechanism with exponential backoff
+- **Performance Tracking**: View profit/loss, dividend details, and goal progress for pies
+- **Real-time Data**: Direct API integration for up-to-date financial information
 - **Structured Logging**: Comprehensive logging with tracing support
 - **Error Handling**: Robust error handling with detailed error types
 - **MCP 2025-06-18 Compliance**: Full compliance with latest MCP protocol specification
@@ -83,6 +85,56 @@ Retrieves a list of all tradeable instruments from Trading212.
 }
 ```
 
+#### `get_pies`
+
+Retrieves financial summary data for all investment pies from your Trading212 account.
+
+**Parameters:** None
+
+**Scope Required:** `pies:read`
+
+**Example MCP Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "get_pies",
+    "arguments": {}
+  }
+}
+```
+
+**Response includes:**
+- Pie ID and current status
+- Cash balance in each pie
+- Dividend details (gained, reinvested, cash)
+- Performance metrics (invested value, current value, profit/loss)
+- Goal progress percentage
+- Overall performance status (e.g., "AHEAD")
+
+**Sample Response:**
+```json
+{
+  "id": 3311223,
+  "cash": 1.29,
+  "dividendDetails": {
+    "gained": 0.71,
+    "reinvested": 0.71,
+    "inCash": 0.0
+  },
+  "result": {
+    "priceAvgInvestedValue": 3386.1,
+    "priceAvgValue": 3589.01,
+    "priceAvgResult": 202.91,
+    "priceAvgResultCoef": 0.0599
+  },
+  "progress": 0.1639,
+  "status": "AHEAD"
+}
+```
+
 ## Integration with Claude Desktop
 
 Add the following to your Claude Desktop MCP configuration:
@@ -144,9 +196,11 @@ The project enforces strict code quality standards:
 The server implements comprehensive error handling for:
 - API authentication failures
 - Network connectivity issues
-- Rate limiting and retry logic
-- JSON parsing errors
+- Rate limiting (with immediate failure to respect Trading212's strict limits)
+- JSON parsing errors with detailed response logging
 - Configuration errors
+
+**Note**: The server does not retry failed requests to respect Trading212's rate limits. Failed requests return immediately with detailed error information.
 
 ## Logging
 
@@ -196,6 +250,12 @@ Run with debug logging for detailed information:
 ```bash
 RUST_LOG=debug ./target/release/trading212-mcp-server
 ```
+
+Debug logging includes:
+- Raw API request/response bodies
+- HTTP status codes and headers
+- JSON parsing details
+- Request timing information
 
 ## API Documentation
 

@@ -14,7 +14,7 @@ use rust_mcp_sdk::{error::McpSdkError, mcp_server::ServerHandler, McpServer};
 use crate::{config::Trading212Config, errors::Trading212Error, tools::Trading212Tools};
 
 /// Handler for Trading212 MCP protocol messages.
-/// 
+///
 /// This struct implements the [`ServerHandler`] trait to process MCP requests
 /// and manage communication with the Trading212 API.
 pub struct Trading212Handler {
@@ -26,11 +26,11 @@ pub struct Trading212Handler {
 
 impl Trading212Handler {
     /// Create a new `Trading212Handler` instance.
-    /// 
+    ///
     /// Loads configuration and initializes the HTTP client.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if configuration loading or HTTP client creation fails.
     pub fn new() -> Result<Self, McpSdkError> {
         let config = Trading212Config::new().map_err(|e| {
@@ -45,9 +45,9 @@ impl Trading212Handler {
             .user_agent("Trading212-MCP-Server/0.1.0")
             .build()
             .map_err(|e| {
-                McpSdkError::from(std::io::Error::other(
-                    format!("Failed to create HTTP client: {e}"),
-                ))
+                McpSdkError::from(std::io::Error::other(format!(
+                    "Failed to create HTTP client: {e}"
+                )))
             })?;
 
         tracing::info!(
@@ -113,6 +113,9 @@ impl ServerHandler for Trading212Handler {
                 get_instruments_tool
                     .call_tool(&self.client, &self.config)
                     .await
+            }
+            Trading212Tools::GetPiesTool(get_pies_tool) => {
+                get_pies_tool.call_tool(&self.client, &self.config).await
             }
         };
 
