@@ -13,8 +13,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config::Trading212Config, errors::Trading212Error};
 
+/// Helper function to serialize data and create a formatted MCP text response.
+///
+/// This centralizes the JSON serialization and result formatting logic used by all tools.
+fn create_json_response<T>(
+    data: &T,
+    item_type: &str,
+    count: usize,
+) -> Result<CallToolResult, CallToolError>
+where
+    T: serde::Serialize,
+{
+    let json_result = serde_json::to_string_pretty(data).map_err(|e| {
+        let error =
+            Trading212Error::serialization_error(format!("Failed to serialize {item_type}: {e}"));
+        tracing::error!(error = %error, "Serialization failed");
+        CallToolError::new(error)
+    })?;
+
+    Ok(CallToolResult::text_content(vec![TextContent::from(
+        format!("Found {count} {item_type}:\n{json_result}"),
+    )]))
+}
+
+/// Helper function to create a single item JSON response.
+///
+/// Used for responses that return a single item rather than a collection.
+fn create_single_item_response<T>(
+    data: &T,
+    item_name: &str,
+) -> Result<CallToolResult, CallToolError>
+where
+    T: serde::Serialize,
+{
+    let json_result = serde_json::to_string_pretty(data).map_err(|e| {
+        let error =
+            Trading212Error::serialization_error(format!("Failed to serialize {item_name}: {e}"));
+        tracing::error!(error = %error, "Serialization failed");
+        CallToolError::new(error)
+    })?;
+
+    Ok(CallToolResult::text_content(vec![TextContent::from(
+        format!("{item_name}:\n{json_result}"),
+    )]))
+}
+
 /// Make a single HTTP request to the Trading212 API.
-/// 
+///
 /// This is a shared function used by all tools to avoid code duplication.
 async fn make_api_request<T>(
     client: &Client,
@@ -244,24 +289,13 @@ impl GetInstrumentsTool {
             url.push_str(&params.join("&"));
         }
 
-        match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await
-        {
+        match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await {
             Ok(instruments) => {
-                let json_result = serde_json::to_string_pretty(&instruments).map_err(|e| {
-                    let error = Trading212Error::serialization_error(format!(
-                        "Failed to serialize instruments: {e}"
-                    ));
-                    tracing::error!(error = %error, "Serialization failed");
-                    CallToolError::new(error)
-                })?;
-
                 tracing::info!(
                     count = instruments.len(),
                     "Successfully retrieved instruments"
                 );
-                Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("Found {} instruments:\n{}", instruments.len(), json_result),
-                )]))
+                create_json_response(&instruments, "instruments", instruments.len())
             }
             Err(e) => {
                 tracing::error!(error = %e, "Tool execution failed");
@@ -269,7 +303,6 @@ impl GetInstrumentsTool {
             }
         }
     }
-
 }
 
 impl GetPiesTool {
@@ -295,21 +328,10 @@ impl GetPiesTool {
 
         let url = config.endpoint_url("equity/pies");
 
-        match make_api_request::<Vec<Pie>>(client, &config.api_key, &url).await
-        {
+        match make_api_request::<Vec<Pie>>(client, &config.api_key, &url).await {
             Ok(pies) => {
-                let json_result = serde_json::to_string_pretty(&pies).map_err(|e| {
-                    let error = Trading212Error::serialization_error(format!(
-                        "Failed to serialize pies: {e}"
-                    ));
-                    tracing::error!(error = %error, "Serialization failed");
-                    CallToolError::new(error)
-                })?;
-
                 tracing::info!(count = pies.len(), "Successfully retrieved pies");
-                Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("Found {} investment pies:\n{}", pies.len(), json_result),
-                )]))
+                create_json_response(&pies, "investment pies", pies.len())
             }
             Err(e) => {
                 tracing::error!(error = %e, "Tool execution failed");
@@ -317,7 +339,6 @@ impl GetPiesTool {
             }
         }
     }
-
 }
 
 impl GetPieByIdTool {
@@ -343,21 +364,10 @@ impl GetPieByIdTool {
 
         let url = config.endpoint_url(&format!("equity/pies/{}", self.pie_id));
 
-        match make_api_request::<serde_json::Value>(client, &config.api_key, &url).await
-        {
+        match make_api_request::<serde_json::Value>(client, &config.api_key, &url).await {
             Ok(pie_detail) => {
-                let json_result = serde_json::to_string_pretty(&pie_detail).map_err(|e| {
-                    let error = Trading212Error::serialization_error(format!(
-                        "Failed to serialize pie detail: {e}"
-                    ));
-                    tracing::error!(error = %error, "Serialization failed");
-                    CallToolError::new(error)
-                })?;
-
                 tracing::info!(pie_id = self.pie_id, "Successfully retrieved pie details");
-                Ok(CallToolResult::text_content(vec![TextContent::from(
-                    format!("Pie {} details:\n{}", self.pie_id, json_result),
-                )]))
+                create_single_item_response(&pie_detail, &format!("Pie {} details", self.pie_id))
             }
             Err(e) => {
                 tracing::error!(error = %e, pie_id = self.pie_id, "Tool execution failed");
@@ -365,7 +375,6 @@ impl GetPieByIdTool {
             }
         }
     }
-
 }
 
 tool_box! {
