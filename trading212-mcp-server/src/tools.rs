@@ -128,6 +128,21 @@ pub struct GetInstrumentsTool {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPiesTool {}
 
+#[mcp_tool(
+    name = "get_pie_by_id",
+    description = "Get detailed information about a specific investment pie by ID",
+    title = "Get Trading212 Pie Details",
+    idempotent_hint = true,
+    destructive_hint = false,
+    open_world_hint = false,
+    read_only_hint = true
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetPieByIdTool {
+    /// The unique ID of the pie to retrieve
+    pub pie_id: i32,
+}
+
 impl GetInstrumentsTool {
     /// Execute the `get_instruments` tool.
     ///
@@ -365,7 +380,115 @@ impl GetPiesTool {
     }
 }
 
+impl GetPieByIdTool {
+    /// Execute the `get_pie_by_id` tool.
+    ///
+    /// Retrieves detailed information about a specific investment pie from Trading212 API.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - HTTP client for making API requests
+    /// * `config` - Trading212 configuration containing API credentials
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API request fails, response parsing fails,
+    /// or serialization of the results fails.
+    pub async fn call_tool(
+        &self,
+        client: &Client,
+        config: &Trading212Config,
+    ) -> Result<CallToolResult, CallToolError> {
+        tracing::debug!(pie_id = self.pie_id, "Executing get_pie_by_id tool");
+
+        let url = config.endpoint_url(&format!("equity/pies/{}", self.pie_id));
+
+        match self
+            .make_request::<serde_json::Value>(client, &config.api_key, &url)
+            .await
+        {
+            Ok(pie_detail) => {
+                let json_result = serde_json::to_string_pretty(&pie_detail).map_err(|e| {
+                    let error = Trading212Error::serialization_error(format!(
+                        "Failed to serialize pie detail: {e}"
+                    ));
+                    tracing::error!(error = %error, "Serialization failed");
+                    CallToolError::new(error)
+                })?;
+
+                tracing::info!(pie_id = self.pie_id, "Successfully retrieved pie details");
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    format!("Pie {} details:\n{}", self.pie_id, json_result),
+                )]))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, pie_id = self.pie_id, "Tool execution failed");
+                Err(CallToolError::new(e))
+            }
+        }
+    }
+
+    /// Make a single HTTP request to the Trading212 API.
+    async fn make_request<T>(
+        &self,
+        client: &Client,
+        api_key: &str,
+        url: &str,
+    ) -> Result<T, Trading212Error>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let response = client
+            .get(url)
+            .header("Authorization", api_key)
+            .send()
+            .await
+            .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
+
+        let status = response.status();
+        tracing::debug!(
+            status_code = status.as_u16(),
+            url = url,
+            "Received API response"
+        );
+
+        if status == reqwest::StatusCode::OK {
+            let response_text = response.text().await.map_err(|e| {
+                Trading212Error::request_failed(format!("Failed to read response body: {e}"))
+            })?;
+
+            tracing::debug!(
+                response_body = %response_text,
+                response_length = response_text.len(),
+                "Raw API response received"
+            );
+
+            serde_json::from_str::<T>(&response_text).map_err(|e| {
+                tracing::error!(
+                    response_body = %response_text,
+                    parse_error = %e,
+                    "Failed to parse JSON response"
+                );
+                Trading212Error::parse_error(format!(
+                    "Failed to parse JSON response: {e}. Response body: {response_text}"
+                ))
+            })
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!(
+                status_code = status.as_u16(),
+                response_body = %error_text,
+                "API returned non-success status"
+            );
+            Err(Trading212Error::api_error(status.as_u16(), error_text))
+        }
+    }
+}
+
 tool_box! {
     Trading212Tools,
-    [GetInstrumentsTool, GetPiesTool]
+    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool]
 }

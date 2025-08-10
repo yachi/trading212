@@ -5,7 +5,7 @@ A Model Context Protocol (MCP) server that provides access to Trading212 API fun
 ## Features
 
 - **Instrument Retrieval**: Get comprehensive information about tradeable instruments
-- **Investment Pies Analytics**: Access financial performance data for all your Trading212 investment pies
+- **Investment Pies Analytics**: Access financial performance data and detailed holdings for all your Trading212 investment pies
 - **Search & Filtering**: Filter instruments by search terms and instrument types
 - **Performance Tracking**: View profit/loss, dividend details, and goal progress for pies
 - **Real-time Data**: Direct API integration for up-to-date financial information
@@ -132,6 +132,62 @@ Retrieves financial summary data for all investment pies from your Trading212 ac
   },
   "progress": 0.1639,
   "status": "AHEAD"
+}
+```
+
+#### `get_pie_by_id`
+
+Retrieves detailed information about a specific investment pie by its ID, including individual instrument holdings and allocations.
+
+**Parameters:**
+- `pie_id` (required): The unique ID of the pie to retrieve
+
+**Scope Required:** `pies:read`
+
+**Example MCP Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "get_pie_by_id",
+    "arguments": {
+      "pie_id": 3311223
+    }
+  }
+}
+```
+
+**Response includes:**
+- **Instrument Holdings**: Detailed breakdown of each stock/ETF in the pie
+- **Individual Performance**: Profit/loss for each instrument
+- **Share Allocations**: Current vs expected allocation percentages
+- **Pie Settings**: Name, icon, goal, creation date, dividend policy
+- **Quantities Owned**: Exact shares held of each instrument
+
+**Sample Response Structure:**
+```json
+{
+  "instruments": [
+    {
+      "ticker": "NVDA_US_EQ",
+      "currentShare": 0.0803,
+      "expectedShare": 0.14,
+      "ownedQuantity": 2.1225186,
+      "result": {
+        "priceAvgInvestedValue": 287.06,
+        "priceAvgResult": 1.13,
+        "priceAvgResultCoef": 0.0039
+      }
+    }
+  ],
+  "settings": {
+    "name": "Growth Focused Strategy",
+    "goal": 21908.0,
+    "icon": "Coins",
+    "dividendCashAction": "REINVEST"
+  }
 }
 ```
 

@@ -117,6 +117,11 @@ impl ServerHandler for Trading212Handler {
             Trading212Tools::GetPiesTool(get_pies_tool) => {
                 get_pies_tool.call_tool(&self.client, &self.config).await
             }
+            Trading212Tools::GetPieByIdTool(get_pie_by_id_tool) => {
+                get_pie_by_id_tool
+                    .call_tool(&self.client, &self.config)
+                    .await
+            }
         };
 
         match &result {
