@@ -74,3 +74,221 @@ impl Trading212Error {
         Self::ConversionError(msg.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_request_failed_constructor() {
+        let error = Trading212Error::request_failed("Network timeout");
+
+        match error {
+            Trading212Error::RequestFailed(msg) => {
+                assert_eq!(msg, "Network timeout");
+            }
+            _ => panic!("Expected RequestFailed variant"),
+        }
+    }
+
+    #[test]
+    fn test_request_failed_constructor_with_string() {
+        let message = String::from("Connection refused");
+        let error = Trading212Error::request_failed(message);
+
+        match error {
+            Trading212Error::RequestFailed(msg) => {
+                assert_eq!(msg, "Connection refused");
+            }
+            _ => panic!("Expected RequestFailed variant"),
+        }
+    }
+
+    #[test]
+    fn test_api_error_constructor() {
+        let error = Trading212Error::api_error(401, "Unauthorized");
+
+        match error {
+            Trading212Error::ApiError { status, message } => {
+                assert_eq!(status, 401);
+                assert_eq!(message, "Unauthorized");
+            }
+            _ => panic!("Expected ApiError variant"),
+        }
+    }
+
+    #[test]
+    fn test_api_error_constructor_with_string() {
+        let message = String::from("Invalid API key");
+        let error = Trading212Error::api_error(403, message);
+
+        match error {
+            Trading212Error::ApiError { status, message } => {
+                assert_eq!(status, 403);
+                assert_eq!(message, "Invalid API key");
+            }
+            _ => panic!("Expected ApiError variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_constructor() {
+        let error = Trading212Error::parse_error("Invalid JSON format");
+
+        match error {
+            Trading212Error::ParseError(msg) => {
+                assert_eq!(msg, "Invalid JSON format");
+            }
+            _ => panic!("Expected ParseError variant"),
+        }
+    }
+
+    #[test]
+    fn test_serialization_error_constructor() {
+        let error = Trading212Error::serialization_error("Failed to serialize response");
+
+        match error {
+            Trading212Error::SerializationError(msg) => {
+                assert_eq!(msg, "Failed to serialize response");
+            }
+            _ => panic!("Expected SerializationError variant"),
+        }
+    }
+
+    #[test]
+    fn test_config_error_constructor() {
+        let error = Trading212Error::config_error("API key not found");
+
+        match error {
+            Trading212Error::ConfigError(msg) => {
+                assert_eq!(msg, "API key not found");
+            }
+            _ => panic!("Expected ConfigError variant"),
+        }
+    }
+
+    #[test]
+    fn test_conversion_error_constructor() {
+        let error = Trading212Error::conversion_error("Invalid parameter type");
+
+        match error {
+            Trading212Error::ConversionError(msg) => {
+                assert_eq!(msg, "Invalid parameter type");
+            }
+            _ => panic!("Expected ConversionError variant"),
+        }
+    }
+
+    #[test]
+    fn test_request_failed_display() {
+        let error = Trading212Error::request_failed("Network timeout");
+        let display_string = format!("{}", error);
+
+        assert_eq!(display_string, "Request failed: Network timeout");
+    }
+
+    #[test]
+    fn test_api_error_display() {
+        let error = Trading212Error::api_error(404, "Resource not found");
+        let display_string = format!("{}", error);
+
+        assert_eq!(display_string, "API error (404): Resource not found");
+    }
+
+    #[test]
+    fn test_parse_error_display() {
+        let error = Trading212Error::parse_error("Malformed JSON");
+        let display_string = format!("{}", error);
+
+        assert_eq!(display_string, "Failed to parse response: Malformed JSON");
+    }
+
+    #[test]
+    fn test_serialization_error_display() {
+        let error = Trading212Error::serialization_error("Cannot serialize null value");
+        let display_string = format!("{}", error);
+
+        assert_eq!(
+            display_string,
+            "Failed to serialize data: Cannot serialize null value"
+        );
+    }
+
+    #[test]
+    fn test_config_error_display() {
+        let error = Trading212Error::config_error("Missing environment variable");
+        let display_string = format!("{}", error);
+
+        assert_eq!(
+            display_string,
+            "Configuration error: Missing environment variable"
+        );
+    }
+
+    #[test]
+    fn test_conversion_error_display() {
+        let error = Trading212Error::conversion_error("String to integer conversion failed");
+        let display_string = format!("{}", error);
+
+        assert_eq!(
+            display_string,
+            "Parameter conversion error: String to integer conversion failed"
+        );
+    }
+
+    #[test]
+    fn test_error_trait_implementation() {
+        let error = Trading212Error::request_failed("Test error");
+
+        // Test that it implements std::error::Error
+        let error_trait: &dyn std::error::Error = &error;
+        assert!(error_trait.source().is_none());
+
+        // Test Debug formatting
+        let debug_string = format!("{:?}", error);
+        assert!(debug_string.contains("RequestFailed"));
+        assert!(debug_string.contains("Test error"));
+    }
+
+    #[test]
+    fn test_error_variants_are_debug() {
+        // Test all variants can be formatted with Debug
+        let errors = vec![
+            Trading212Error::request_failed("test"),
+            Trading212Error::api_error(500, "test"),
+            Trading212Error::parse_error("test"),
+            Trading212Error::serialization_error("test"),
+            Trading212Error::config_error("test"),
+            Trading212Error::conversion_error("test"),
+        ];
+
+        for error in errors {
+            let debug_string = format!("{:?}", error);
+            assert!(!debug_string.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_error_equality_by_variant() {
+        // Test that errors of the same variant with same content are logically equivalent
+        let error1 = Trading212Error::request_failed("timeout");
+        let error2 = Trading212Error::request_failed("timeout");
+
+        // Since Trading212Error doesn't implement PartialEq, we test via string representation
+        assert_eq!(format!("{}", error1), format!("{}", error2));
+        assert_eq!(format!("{:?}", error1), format!("{:?}", error2));
+    }
+
+    #[test]
+    fn test_error_different_variants() {
+        let request_error = Trading212Error::request_failed("test");
+        let config_error = Trading212Error::config_error("test");
+
+        // Different variants should have different string representations
+        assert_ne!(format!("{}", request_error), format!("{}", config_error));
+        assert_ne!(
+            format!("{:?}", request_error),
+            format!("{:?}", config_error)
+        );
+    }
+}
