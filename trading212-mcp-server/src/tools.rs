@@ -507,4 +507,337 @@ mod tests {
             "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=&type="
         );
     }
+
+    mod http_tests {
+        use super::*;
+        use reqwest::Client;
+        use wiremock::matchers::{header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        #[tokio::test]
+        async fn test_get_instruments_success() {
+            let mock_server = MockServer::start().await;
+
+            // Mock successful response
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .and(header("Authorization", "test_key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(vec![
+                    Instrument {
+                        ticker: "AAPL".to_string(),
+                        instrument_type: "STOCK".to_string(),
+                        working_schedule_id: 1,
+                        isin: "US0378331005".to_string(),
+                        currency_code: "USD".to_string(),
+                        name: "Apple Inc.".to_string(),
+                        short_name: "Apple".to_string(),
+                        max_open_quantity: 1000.0,
+                        added_on: "2020-01-01".to_string(),
+                    },
+                    Instrument {
+                        ticker: "GOOGL".to_string(),
+                        instrument_type: "STOCK".to_string(),
+                        working_schedule_id: 1,
+                        isin: "US02079K3059".to_string(),
+                        currency_code: "USD".to_string(),
+                        name: "Alphabet Inc.".to_string(),
+                        short_name: "Alphabet".to_string(),
+                        max_open_quantity: 500.0,
+                        added_on: "2020-01-01".to_string(),
+                    },
+                ]))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert!(response.content.len() == 1);
+        }
+
+        #[tokio::test]
+        async fn test_get_instruments_with_search_params() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .and(query_param("search", "AAPL"))
+                .and(query_param("type", "STOCK"))
+                .and(header("Authorization", "test_key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(vec![Instrument {
+                    ticker: "AAPL".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 1,
+                    isin: "US0378331005".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Apple Inc.".to_string(),
+                    short_name: "Apple".to_string(),
+                    max_open_quantity: 1000.0,
+                    added_on: "2020-01-01".to_string(),
+                }]))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: Some("AAPL".to_string()),
+                instrument_type: Some("STOCK".to_string()),
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_instruments_unauthorized() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": "Unauthorized"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "invalid_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+            let error = result.unwrap_err();
+            // API error for 401 should be about authentication/authorization
+            assert!(error.to_string().contains("API error") || error.to_string().contains("401"));
+        }
+
+        #[tokio::test]
+        async fn test_get_instruments_not_found() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error": "Not Found"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_get_instruments_server_error() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                    "error": "Internal Server Error"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_get_instruments_malformed_json() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("invalid json"))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_get_pies_success() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/pies"))
+                .and(header("Authorization", "test_key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(vec![Pie {
+                    id: 123,
+                    cash: 10.5,
+                    dividend_details: DividendDetails {
+                        gained: 5.0,
+                        reinvested: 4.0,
+                        in_cash: 1.0,
+                    },
+                    result: PieResult {
+                        price_avg_invested_value: 1000.0,
+                        price_avg_value: 1100.0,
+                        price_avg_result: 100.0,
+                        price_avg_result_coef: 0.1,
+                    },
+                    progress: 0.75,
+                    status: "AHEAD".to_string(),
+                }]))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetPiesTool {};
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_pie_by_id_success() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/123"))
+                .and(header("Authorization", "test_key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": 123,
+                    "name": "My Investment Pie",
+                    "targetValueAmount": 5000.0,
+                    "instruments": [
+                        {
+                            "ticker": "AAPL",
+                            "targetSharePercentage": 0.5
+                        }
+                    ]
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetPieByIdTool { pie_id: 123 };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_pie_by_id_not_found() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/999"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error": "Pie not found"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetPieByIdTool { pie_id: 999 };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_network_timeout() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "http://127.0.0.1:1".to_string(), // Non-existent endpoint
+            };
+
+            let client = Client::builder()
+                .timeout(std::time::Duration::from_millis(100))
+                .build()
+                .unwrap();
+
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+            };
+
+            let result = tool.call_tool(&client, &config).await;
+
+            assert!(result.is_err());
+        }
+    }
 }

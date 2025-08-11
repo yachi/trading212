@@ -6,6 +6,21 @@
 use crate::errors::Trading212Error;
 use std::{env, fs, path::PathBuf};
 
+/// Trait for accessing environment variables - allows for testing with mocked values
+pub trait EnvProvider {
+    /// Get an environment variable value
+    fn var(&self, key: &str) -> Result<String, std::env::VarError>;
+}
+
+/// Default implementation using `std::env`
+pub struct SystemEnvProvider;
+
+impl EnvProvider for SystemEnvProvider {
+    fn var(&self, key: &str) -> Result<String, std::env::VarError> {
+        env::var(key)
+    }
+}
+
 /// Configuration for the Trading212 MCP server.
 ///
 /// Contains all necessary configuration parameters including API credentials,
@@ -19,22 +34,29 @@ pub struct Trading212Config {
 }
 
 impl Trading212Config {
-    /// Create a new configuration with default values
+    /// Create a new configuration with default values using system environment
     pub fn new() -> Result<Self, Trading212Error> {
-        let api_key = Self::load_api_key()?;
+        Self::with_env_provider(&SystemEnvProvider)
+    }
+
+    /// Create a new configuration with a custom environment provider (useful for testing)
+    pub fn with_env_provider(env_provider: &dyn EnvProvider) -> Result<Self, Trading212Error> {
+        let api_key = Self::load_api_key_with_env(env_provider)?;
 
         Ok(Self {
             api_key,
-            base_url: env::var("TRADING212_BASE_URL")
+            base_url: env_provider
+                .var("TRADING212_BASE_URL")
                 .unwrap_or_else(|_| "https://live.trading212.com/api/v0".to_string()),
         })
     }
 
-    /// Load API key from ~/.trading212-api-key file
-    fn load_api_key() -> Result<String, Trading212Error> {
+    /// Load API key from ~/.trading212-api-key file with custom env provider
+    fn load_api_key_with_env(env_provider: &dyn EnvProvider) -> Result<String, Trading212Error> {
         let mut api_key_path = PathBuf::new();
         api_key_path.push(
-            env::var("HOME")
+            env_provider
+                .var("HOME")
                 .map_err(|_| Trading212Error::config_error("HOME environment variable not set"))?,
         );
         api_key_path.push(".trading212-api-key");
@@ -77,9 +99,34 @@ impl Trading212Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
+    use std::{collections::HashMap, fs};
     use tempfile::TempDir;
+
+    /// Mock environment provider for testing
+    struct MockEnvProvider {
+        vars: HashMap<String, String>,
+    }
+
+    impl MockEnvProvider {
+        fn new() -> Self {
+            Self {
+                vars: HashMap::new(),
+            }
+        }
+
+        fn set(&mut self, key: &str, value: &str) {
+            self.vars.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    impl EnvProvider for MockEnvProvider {
+        fn var(&self, key: &str) -> Result<String, std::env::VarError> {
+            self.vars
+                .get(key)
+                .map(|v| v.clone())
+                .ok_or(std::env::VarError::NotPresent)
+        }
+    }
 
     #[test]
     fn test_endpoint_url_basic() {
@@ -145,17 +192,11 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, api_key_content).unwrap();
 
-        // Set HOME to temp directory
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
+        // Mock environment with HOME set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), api_key_content);
@@ -170,17 +211,11 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, api_key_content).unwrap();
 
-        // Set HOME to temp directory
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
+        // Mock environment with HOME set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "test_api_key_12345");
@@ -194,17 +229,11 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, "").unwrap();
 
-        // Set HOME to temp directory
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
+        // Mock environment with HOME set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -219,17 +248,11 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, "   \n\t  ").unwrap();
 
-        // Set HOME to temp directory
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
+        // Mock environment with HOME set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -240,17 +263,11 @@ mod tests {
     fn test_load_api_key_file_not_found() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Set HOME to temp directory (no API key file exists)
-        let original_home = env::var("HOME").ok();
-        env::set_var("HOME", temp_dir.path());
+        // Mock environment with HOME set (no API key file exists)
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -259,17 +276,11 @@ mod tests {
 
     #[test]
     fn test_load_api_key_no_home_env() {
-        // Remove HOME environment variable
-        let original_home = env::var("HOME").ok();
-        env::remove_var("HOME");
+        // Mock environment without HOME variable
+        let mock_env = MockEnvProvider::new();
+        // Don't set HOME to test missing environment variable
 
-        let result = Trading212Config::load_api_key();
-
-        // Restore original HOME
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -287,23 +298,12 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, api_key_content).unwrap();
 
-        // Set HOME and remove TRADING212_BASE_URL if it exists
-        let original_home = env::var("HOME").ok();
-        let original_base_url = env::var("TRADING212_BASE_URL").ok();
-        env::set_var("HOME", temp_dir.path());
-        env::remove_var("TRADING212_BASE_URL");
+        // Mock environment with HOME set, but no TRADING212_BASE_URL
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+        // Don't set TRADING212_BASE_URL to test default behavior
 
-        let result = Trading212Config::new();
-
-        // Restore environment variables
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
-        match original_base_url {
-            Some(url) => env::set_var("TRADING212_BASE_URL", url),
-            None => env::remove_var("TRADING212_BASE_URL"),
-        }
+        let result = Trading212Config::with_env_provider(&mock_env);
 
         assert!(result.is_ok());
         let config = result.unwrap();
@@ -321,28 +321,16 @@ mod tests {
         let api_key_path = temp_dir.path().join(".trading212-api-key");
         fs::write(&api_key_path, api_key_content).unwrap();
 
-        // Set environment variables
-        let original_home = env::var("HOME").ok();
-        let original_base_url = env::var("TRADING212_BASE_URL").ok();
-        env::set_var("HOME", temp_dir.path());
-        env::set_var("TRADING212_BASE_URL", custom_base_url);
+        // Mock environment with both HOME and TRADING212_BASE_URL set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+        mock_env.set("TRADING212_BASE_URL", custom_base_url);
 
-        let result = Trading212Config::new();
+        let result = Trading212Config::with_env_provider(&mock_env);
 
-        // Validate result before restoring environment
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.api_key, api_key_content);
         assert_eq!(config.base_url, custom_base_url);
-
-        // Restore environment variables
-        match original_home {
-            Some(home) => env::set_var("HOME", home),
-            None => env::remove_var("HOME"),
-        }
-        match original_base_url {
-            Some(url) => env::set_var("TRADING212_BASE_URL", url),
-            None => env::remove_var("TRADING212_BASE_URL"),
-        }
     }
 }
