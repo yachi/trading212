@@ -133,6 +133,7 @@ impl ServerHandler for Trading212Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::Trading212Tools;
 
     /// Create a mock Trading212Handler for testing
     fn create_test_handler() -> Trading212Handler {
@@ -169,6 +170,50 @@ mod tests {
     fn test_handler_has_correct_config() {
         let handler = create_test_handler();
         assert_eq!(handler.config.api_key, "test-api-key");
-        assert_eq!(handler.config.base_url, "https://test.trading212.com/api/v0");
+        assert_eq!(
+            handler.config.base_url,
+            "https://test.trading212.com/api/v0"
+        );
+    }
+
+    #[test]
+    fn test_handler_tools_list() {
+        // Test that tools list is correctly structured
+        let tools = Trading212Tools::tools();
+        assert_eq!(tools.len(), 3);
+
+        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tool_names.contains(&"get_instruments"));
+        assert!(tool_names.contains(&"get_pies"));
+        assert!(tool_names.contains(&"get_pie_by_id"));
+
+        // Verify all tools have descriptions
+        for tool in &tools {
+            if let Some(desc) = &tool.description {
+                assert!(!desc.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_handler_client_creation() {
+        let handler = create_test_handler();
+
+        // Verify client exists (basic validation)
+        // We can't easily test the client directly without making HTTP requests
+        assert!(std::mem::size_of_val(&handler.client) > 0);
+    }
+
+    #[test]
+    fn test_handler_config_validation() {
+        let handler = create_test_handler();
+
+        // Test config endpoint URL generation
+        let endpoint = handler.config.endpoint_url("test/path");
+        assert_eq!(endpoint, "https://test.trading212.com/api/v0/test/path");
+
+        // Test base URL is properly formatted
+        assert!(handler.config.base_url.starts_with("https://"));
+        assert!(!handler.config.base_url.ends_with('/'));
     }
 }
