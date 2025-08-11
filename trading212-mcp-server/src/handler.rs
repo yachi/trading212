@@ -41,7 +41,6 @@ impl Trading212Handler {
         })?;
 
         let client = Client::builder()
-            .timeout(config.timeout)
             .user_agent("Trading212-MCP-Server/0.1.0")
             .build()
             .map_err(|e| {
@@ -52,8 +51,6 @@ impl Trading212Handler {
 
         tracing::info!(
             base_url = %config.base_url,
-            timeout_secs = config.timeout.as_secs(),
-            max_retries = config.max_retries,
             "Initialized Trading212Handler"
         );
 

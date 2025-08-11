@@ -409,3 +409,102 @@ tool_box! {
     Trading212Tools,
     [GetInstrumentsTool, GetPiesTool, GetPieByIdTool]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_instruments_url_no_params() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+
+        let url = build_instruments_url(&config, None, None);
+
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments"
+        );
+    }
+
+    #[test]
+    fn test_build_instruments_url_with_search() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+        let search = Some("AAPL".to_string());
+
+        let url = build_instruments_url(&config, search.as_ref(), None);
+
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=AAPL"
+        );
+    }
+
+    #[test]
+    fn test_build_instruments_url_with_type() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+        let instrument_type = Some("STOCK".to_string());
+
+        let url = build_instruments_url(&config, None, instrument_type.as_ref());
+
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments?type=STOCK"
+        );
+    }
+
+    #[test]
+    fn test_build_instruments_url_with_both_params() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+        let search = Some("Tesla".to_string());
+        let instrument_type = Some("STOCK".to_string());
+
+        let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
+
+        assert_eq!(url, "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=Tesla&type=STOCK");
+    }
+
+    #[test]
+    fn test_build_instruments_url_with_special_characters() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+        let search = Some("S&P 500".to_string());
+
+        let url = build_instruments_url(&config, search.as_ref(), None);
+
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=S%26P%20500"
+        );
+    }
+
+    #[test]
+    fn test_build_instruments_url_empty_strings() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+        let search = Some("".to_string());
+        let instrument_type = Some("".to_string());
+
+        let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
+
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=&type="
+        );
+    }
+}
