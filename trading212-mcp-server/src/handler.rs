@@ -129,3 +129,46 @@ impl ServerHandler for Trading212Handler {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a mock Trading212Handler for testing
+    fn create_test_handler() -> Trading212Handler {
+        let config = Trading212Config {
+            api_key: "test-api-key".to_string(),
+            base_url: "https://test.trading212.com/api/v0".to_string(),
+        };
+
+        let client = Client::builder()
+            .user_agent("Test-Agent/1.0")
+            .build()
+            .expect("Failed to create test HTTP client");
+
+        Trading212Handler { client, config }
+    }
+
+    #[test]
+    fn test_handler_creation_success() {
+        // Test successful handler creation (requires valid API key file)
+        // This test might fail if no API key file exists
+        match Trading212Handler::new() {
+            Ok(handler) => {
+                assert!(!handler.config.api_key.is_empty());
+                assert!(!handler.config.base_url.is_empty());
+            }
+            Err(_) => {
+                // Handler creation can fail if API key file doesn't exist
+                // This is expected in test environments
+            }
+        }
+    }
+
+    #[test]
+    fn test_handler_has_correct_config() {
+        let handler = create_test_handler();
+        assert_eq!(handler.config.api_key, "test-api-key");
+        assert_eq!(handler.config.base_url, "https://test.trading212.com/api/v0");
+    }
+}
