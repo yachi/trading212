@@ -840,4 +840,131 @@ mod tests {
             assert!(result.is_err());
         }
     }
+
+    mod helper_function_tests {
+        use super::*;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        struct TestData {
+            name: String,
+            value: i32,
+        }
+
+        #[test]
+        fn test_create_json_response_success() {
+            let test_data = vec![
+                TestData {
+                    name: "Test1".to_string(),
+                    value: 42,
+                },
+                TestData {
+                    name: "Test2".to_string(),
+                    value: 84,
+                },
+            ];
+
+            let result = create_json_response(&test_data, "test items", test_data.len());
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert_eq!(response.content.len(), 1);
+            // Test that the response was created successfully - specific content format testing
+            // would require more complex MCP response parsing
+        }
+
+        #[test]
+        fn test_create_json_response_empty_collection() {
+            let test_data: Vec<TestData> = vec![];
+            let result = create_json_response(&test_data, "items", 0);
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert_eq!(response.content.len(), 1);
+        }
+
+        #[test]
+        fn test_create_single_item_response_success() {
+            let test_item = TestData {
+                name: "SingleTest".to_string(),
+                value: 123,
+            };
+
+            let result = create_single_item_response(&test_item, "Test Item");
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert_eq!(response.content.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn test_process_response_success() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+
+            let mock_server = MockServer::start().await;
+            let test_data = TestData {
+                name: "ProcessTest".to_string(),
+                value: 456,
+            };
+
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&test_data))
+                .mount(&mock_server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let response = client.get(&mock_server.uri()).send().await.unwrap();
+
+            let result: Result<TestData, Trading212Error> = process_response(response).await;
+
+            assert!(result.is_ok());
+            let parsed_data = result.unwrap();
+            assert_eq!(parsed_data, test_data);
+        }
+
+        #[tokio::test]
+        async fn test_process_response_invalid_json() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("invalid json {"))
+                .mount(&mock_server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let response = client.get(&mock_server.uri()).send().await.unwrap();
+
+            let result: Result<TestData, Trading212Error> = process_response(response).await;
+
+            assert!(result.is_err());
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("Failed to parse JSON response"));
+        }
+
+        #[tokio::test]
+        async fn test_process_response_empty_body() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(""))
+                .mount(&mock_server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let response = client.get(&mock_server.uri()).send().await.unwrap();
+
+            let result: Result<TestData, Trading212Error> = process_response(response).await;
+
+            assert!(result.is_err());
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("Failed to parse JSON response"));
+        }
+    }
 }
