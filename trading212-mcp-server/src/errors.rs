@@ -291,4 +291,68 @@ mod tests {
             format!("{:?}", config_error)
         );
     }
+
+    #[test]
+    fn test_error_with_empty_strings() {
+        // Test error creation with empty strings
+        let errors = vec![
+            Trading212Error::request_failed(""),
+            Trading212Error::api_error(400, ""),
+            Trading212Error::parse_error(""),
+            Trading212Error::serialization_error(""),
+            Trading212Error::config_error(""),
+            Trading212Error::conversion_error(""),
+        ];
+
+        for error in errors {
+            let display_string = format!("{}", error);
+            assert!(!display_string.is_empty());
+
+            // Test debug formatting works
+            let debug_string = format!("{:?}", error);
+            assert!(!debug_string.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_api_error_with_zero_status() {
+        let error = Trading212Error::api_error(0, "Invalid status");
+
+        match &error {
+            Trading212Error::ApiError { status, message } => {
+                assert_eq!(*status, 0);
+                assert_eq!(message, "Invalid status");
+            }
+            _ => panic!("Expected ApiError variant"),
+        }
+
+        let display_string = format!("{}", error);
+        assert_eq!(display_string, "API error (0): Invalid status");
+    }
+
+    #[test]
+    fn test_api_error_with_high_status_code() {
+        let error = Trading212Error::api_error(999, "Custom error");
+
+        let display_string = format!("{}", error);
+        assert_eq!(display_string, "API error (999): Custom error");
+    }
+
+    #[test]
+    fn test_error_source_is_none() {
+        // Test that all error variants return None for source
+        let errors = vec![
+            Trading212Error::request_failed("test"),
+            Trading212Error::api_error(500, "test"),
+            Trading212Error::parse_error("test"),
+            Trading212Error::serialization_error("test"),
+            Trading212Error::config_error("test"),
+            Trading212Error::conversion_error("test"),
+        ];
+
+        for error in errors {
+            let error_trait: &dyn std::error::Error = &error;
+            assert!(error_trait.source().is_none());
+        }
+    }
 }

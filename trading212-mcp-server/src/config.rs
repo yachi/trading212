@@ -333,4 +333,66 @@ mod tests {
         assert_eq!(config.api_key, api_key_content);
         assert_eq!(config.base_url, custom_base_url);
     }
+
+    #[test]
+    fn test_endpoint_url_complex_path() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+
+        // Test with complex path including query parameters
+        let url = config.endpoint_url("equity/metadata/instruments?search=AAPL&type=STOCK");
+        assert_eq!(
+            url,
+            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=AAPL&type=STOCK"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_url_unicode_path() {
+        let config = Trading212Config {
+            api_key: "test_key".to_string(),
+            base_url: "https://demo.trading212.com/api/v0".to_string(),
+        };
+
+        // Test with Unicode characters in path
+        let url = config.endpoint_url("search/αβγ");
+        assert_eq!(url, "https://demo.trading212.com/api/v0/search/αβγ");
+    }
+
+    #[test]
+    fn test_config_debug_representation() {
+        let config = Trading212Config {
+            api_key: "secret_key".to_string(),
+            base_url: "https://test.trading212.com/api/v0".to_string(),
+        };
+
+        let debug_string = format!("{:?}", config);
+        assert!(debug_string.contains("Trading212Config"));
+        assert!(debug_string.contains("api_key"));
+        assert!(debug_string.contains("base_url"));
+    }
+
+    #[test]
+    fn test_load_api_key_with_very_long_key() {
+        let temp_dir = TempDir::new().unwrap();
+        // Create a very long API key (1000 characters)
+        let api_key_content = "a".repeat(1000);
+
+        // Create API key file
+        let api_key_path = temp_dir.path().join(".trading212-api-key");
+        fs::write(&api_key_path, &api_key_content).unwrap();
+
+        // Mock environment with HOME set
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
+
+        assert!(result.is_ok());
+        let api_key = result.unwrap();
+        assert_eq!(api_key, api_key_content);
+        assert_eq!(api_key.len(), 1000);
+    }
 }
