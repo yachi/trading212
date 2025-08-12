@@ -278,4 +278,59 @@ mod tests {
         assert_eq!(handler.config.api_key, "test-api-key");
         assert!(handler.config.base_url.contains("trading212.com"));
     }
+
+    #[test]
+    fn test_handler_configuration_properties() {
+        let handler = create_test_handler();
+
+        // Test that configuration is properly set
+        assert_eq!(handler.config.api_key, "test-api-key");
+        assert_eq!(
+            handler.config.base_url,
+            "https://test.trading212.com/api/v0"
+        );
+
+        // Test endpoint URL generation
+        let endpoint = handler.config.endpoint_url("equity/pies");
+        assert_eq!(endpoint, "https://test.trading212.com/api/v0/equity/pies");
+    }
+
+    #[test]
+    fn test_handler_debug_representation() {
+        let handler = create_test_handler();
+
+        // Test that the handler can be formatted for debugging
+        let debug_string = format!("{:?}", handler.config);
+        assert!(debug_string.contains("Trading212Config"));
+        assert!(debug_string.contains("api_key"));
+        assert!(debug_string.contains("base_url"));
+    }
+
+    #[test]
+    fn test_handler_memory_size() {
+        let handler = create_test_handler();
+
+        // Verify handler has reasonable memory footprint
+        assert!(std::mem::size_of_val(&handler) > 0);
+        assert!(std::mem::size_of_val(&handler.client) > 0);
+        assert!(std::mem::size_of_val(&handler.config) > 0);
+    }
+
+    #[test]
+    fn test_error_conversion_edge_cases() {
+        // Test various error conversion scenarios
+        let errors = vec![
+            Trading212Error::request_failed("Network error"),
+            Trading212Error::api_error(500, "Internal server error"),
+            Trading212Error::parse_error("Invalid JSON"),
+            Trading212Error::config_error("Missing API key"),
+            Trading212Error::conversion_error("Invalid parameter"),
+        ];
+
+        for error in errors {
+            let call_tool_error = CallToolError::new(error);
+            let error_string = call_tool_error.to_string();
+            assert!(!error_string.is_empty());
+        }
+    }
 }

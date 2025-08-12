@@ -1049,5 +1049,123 @@ mod tests {
             let params: Vec<&str> = query_part.split('&').collect();
             assert_eq!(params.len(), 2);
         }
+
+        #[test]
+        fn test_build_instruments_url_edge_cases() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "https://test.trading212.com/api/v0".to_string(),
+            };
+
+            // Test with empty strings
+            let search = Some("".to_string());
+            let instrument_type = Some("".to_string());
+            let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
+
+            assert!(url.contains("search="));
+            assert!(url.contains("type="));
+            assert!(url.contains("&"));
+        }
+
+        #[test]
+        fn test_build_instruments_url_special_characters() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "https://test.trading212.com/api/v0".to_string(),
+            };
+
+            // Test with special characters that need encoding
+            let search = Some("A&B+C=D%E".to_string());
+            let url = build_instruments_url(&config, search.as_ref(), None);
+
+            // Should properly encode all special characters
+            assert!(url.contains("search=A%26B%2BC%3DD%25E"));
+        }
+    }
+
+    mod error_path_tests {
+        use super::*;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct TestResponse {
+            data: String,
+        }
+
+        #[tokio::test]
+        async fn test_process_response_with_different_content_types() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+
+            let mock_server = MockServer::start().await;
+
+            let test_data = TestResponse {
+                data: "test_content".to_string(),
+            };
+
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(&test_data)
+                        .insert_header("content-type", "application/json; charset=utf-8"),
+                )
+                .mount(&mock_server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let response = client.get(&mock_server.uri()).send().await.unwrap();
+
+            let result: Result<TestResponse, Trading212Error> = process_response(response).await;
+
+            assert!(result.is_ok());
+            let parsed = result.unwrap();
+            assert_eq!(parsed.data, "test_content");
+        }
+
+        #[test]
+        fn test_create_json_response_with_large_count() {
+            use std::collections::HashMap;
+
+            let test_data: HashMap<String, i32> = HashMap::new();
+            let result = create_json_response(&test_data, "items", 999999);
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert_eq!(response.content.len(), 1);
+        }
+
+        #[test]
+        fn test_create_single_item_response_with_unicode() {
+            let test_data = "Unicode test: αβγδε 中文 🦀";
+            let result = create_single_item_response(&test_data, "Unicode Item");
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+            assert_eq!(response.content.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn test_process_response_with_bom() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+
+            let mock_server = MockServer::start().await;
+
+            // JSON with BOM (Byte Order Mark)
+            let json_with_bom = "\u{FEFF}{\"data\":\"test\"}";
+
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(json_with_bom))
+                .mount(&mock_server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let response = client.get(&mock_server.uri()).send().await.unwrap();
+
+            let result: Result<TestResponse, Trading212Error> = process_response(response).await;
+
+            // Should handle BOM gracefully (serde_json strips it automatically)
+            assert!(result.is_ok());
+        }
     }
 }

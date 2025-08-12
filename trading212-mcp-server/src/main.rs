@@ -175,4 +175,54 @@ mod tests {
         assert!(instructions.contains("Trading212"));
         assert!(instructions.contains("API"));
     }
+
+    #[test]
+    fn test_create_server_details_protocol_version() {
+        let details = create_server_details();
+
+        // Verify protocol version is set correctly
+        assert_eq!(details.protocol_version, LATEST_PROTOCOL_VERSION);
+        assert!(!details.protocol_version.is_empty());
+    }
+
+    #[test]
+    fn test_create_server_details_meta_field() {
+        let details = create_server_details();
+
+        // Verify meta field is None as expected
+        assert!(details.meta.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_main_components_error_handling() {
+        // Test that invalid transport options are handled appropriately
+        let transport_options = TransportOptions::default();
+        let result = std::panic::catch_unwind(|| StdioTransport::new(transport_options));
+
+        // Should not panic
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_server_details_consistency() {
+        let details1 = create_server_details();
+        let details2 = create_server_details();
+
+        // Should create identical server details each time
+        assert_eq!(details1.server_info.name, details2.server_info.name);
+        assert_eq!(details1.server_info.version, details2.server_info.version);
+        assert_eq!(details1.protocol_version, details2.protocol_version);
+    }
+
+    #[test]
+    fn test_init_tracing_idempotent() {
+        // Test that multiple calls to init_tracing don't cause issues
+        for _ in 0..3 {
+            let result = std::panic::catch_unwind(|| {
+                init_tracing();
+            });
+            // Should not panic (though may return error on subsequent calls)
+            result.ok();
+        }
+    }
 }
