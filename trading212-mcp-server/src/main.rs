@@ -120,4 +120,59 @@ mod tests {
         })
         .ok(); // Ignore result since tracing may already be initialized
     }
+
+    #[test]
+    fn test_transport_creation() {
+        // Test that transport creation works with default options
+        let result = std::panic::catch_unwind(|| StdioTransport::new(TransportOptions::default()));
+
+        // Should not panic during creation
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_main_components_integration() {
+        // Test that all main components can be created without errors
+        let server_details = create_server_details();
+
+        // Verify server details are valid
+        assert!(!server_details.server_info.name.is_empty());
+        assert!(!server_details.server_info.version.is_empty());
+        assert!(server_details.capabilities.tools.is_some());
+
+        // Test transport creation
+        let transport_result = StdioTransport::new(TransportOptions::default());
+        assert!(transport_result.is_ok());
+
+        // Test that we can create the server components independently
+        // Note: We don't test actual server startup as it would hang the test
+    }
+
+    #[test]
+    fn test_server_info_completeness() {
+        let details = create_server_details();
+
+        // Verify all required fields are populated
+        assert_eq!(details.server_info.name, "Trading212 MCP Server");
+        assert_eq!(details.server_info.version, "0.1.0");
+        assert_eq!(
+            details.server_info.title,
+            Some("Trading212 MCP Server".to_string())
+        );
+
+        // Verify capabilities structure
+        let tools_capability = details
+            .capabilities
+            .tools
+            .expect("Tools capability should be present");
+        assert!(tools_capability.list_changed.is_none()); // Should be None for this implementation
+
+        // Verify instructions are meaningful
+        let instructions = details
+            .instructions
+            .expect("Instructions should be present");
+        assert!(instructions.len() > 10); // Should have meaningful content
+        assert!(instructions.contains("Trading212"));
+        assert!(instructions.contains("API"));
+    }
 }

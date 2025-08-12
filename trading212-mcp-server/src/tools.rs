@@ -966,5 +966,88 @@ mod tests {
             let error = result.unwrap_err();
             assert!(error.to_string().contains("Failed to parse JSON response"));
         }
+
+        #[test]
+        fn test_serialization_error_handling() {
+            // Test that serialization works for valid data types
+            use std::collections::HashMap;
+
+            let mut test_data = HashMap::new();
+            test_data.insert("valid", 42);
+
+            let result = create_json_response(&test_data, "test items", 1);
+
+            // Should succeed for valid data
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_single_item_serialization_success() {
+            // Test single item response with valid data
+            let test_item = TestData {
+                name: "ValidTest".to_string(),
+                value: 789,
+            };
+
+            let result = create_single_item_response(&test_item, "Valid Item");
+
+            // Should succeed for valid data
+            assert!(result.is_ok());
+        }
+    }
+
+    mod url_building_tests {
+        use super::*;
+
+        #[test]
+        fn test_build_instruments_url_unicode_handling() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "https://test.trading212.com/api/v0".to_string(),
+            };
+
+            let search = Some("ΑΥΤΟ".to_string()); // Greek letters
+            let url = build_instruments_url(&config, search.as_ref(), None);
+
+            assert!(url.contains("search="));
+            assert!(url.contains("%CE%91%CE%A5%CE%A4%CE%9F")); // URL encoded Greek
+        }
+
+        #[test]
+        fn test_build_instruments_url_long_parameters() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "https://test.trading212.com/api/v0".to_string(),
+            };
+
+            let long_search = "a".repeat(1000);
+            let search = Some(long_search);
+            let url = build_instruments_url(&config, search.as_ref(), None);
+
+            assert!(url.contains("search="));
+            assert!(url.len() > config.base_url.len() + 100);
+        }
+
+        #[test]
+        fn test_build_instruments_url_parameter_ordering() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "https://test.trading212.com/api/v0".to_string(),
+            };
+
+            let search = Some("TEST".to_string());
+            let instrument_type = Some("STOCK".to_string());
+            let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
+
+            // Should contain both parameters joined with &
+            assert!(url.contains("search=TEST"));
+            assert!(url.contains("type=STOCK"));
+            assert!(url.contains("&"));
+
+            // Check that parameters are properly separated
+            let query_part = url.split('?').nth(1).unwrap();
+            let params: Vec<&str> = query_part.split('&').collect();
+            assert_eq!(params.len(), 2);
+        }
     }
 }
