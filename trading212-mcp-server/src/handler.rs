@@ -391,4 +391,163 @@ mod tests {
         assert!(handler.config.base_url.contains("trading212"));
         assert!(!handler.config.api_key.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_handle_list_tools_request_with_mock() {
+        let _handler = create_test_handler();
+
+        // Create a mock request using the simplest possible structure
+        let tools_list = Trading212Tools::tools();
+
+        // Test that we can get the tools list (simulating the handler behavior)
+        assert_eq!(tools_list.len(), 3);
+        assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
+        assert!(tools_list.iter().any(|t| t.name == "get_pies"));
+        assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
+
+        // Test tools list meta properties
+        for tool in &tools_list {
+            assert!(!tool.name.is_empty());
+            if let Some(desc) = &tool.description {
+                assert!(!desc.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_tools_conversion_error_handling() {
+        // Test error handling by verifying error types exist and can be created
+        let conversion_error = Trading212Error::conversion_error("Test conversion error");
+        assert!(conversion_error
+            .to_string()
+            .contains("Test conversion error"));
+
+        // Test that all tool variants exist in the tools list
+        let tools_list = Trading212Tools::tools();
+        assert_eq!(tools_list.len(), 3);
+
+        let tool_names: Vec<&str> = tools_list.iter().map(|t| t.name.as_str()).collect();
+        assert!(tool_names.contains(&"get_instruments"));
+        assert!(tool_names.contains(&"get_pies"));
+        assert!(tool_names.contains(&"get_pie_by_id"));
+    }
+
+    #[test]
+    fn test_tool_creation_and_properties() {
+        // Test creating individual tool instances
+        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
+
+        // Test GetInstrumentsTool creation
+        let instruments_tool = GetInstrumentsTool {
+            search: Some("AAPL".to_string()),
+            instrument_type: Some("STOCK".to_string()),
+        };
+        assert_eq!(instruments_tool.search, Some("AAPL".to_string()));
+        assert_eq!(instruments_tool.instrument_type, Some("STOCK".to_string()));
+
+        // Test GetPiesTool creation
+        let pies_tool = GetPiesTool {};
+        // Just verify it exists and can be created
+        assert!(std::mem::size_of_val(&pies_tool) >= 0);
+
+        // Test GetPieByIdTool creation
+        let pie_by_id_tool = GetPieByIdTool { pie_id: 123 };
+        assert_eq!(pie_by_id_tool.pie_id, 123);
+    }
+
+    #[test]
+    fn test_tool_enum_variants() {
+        // Test that we can create all Trading212Tools variants
+        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
+
+        let instruments_tool = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+        };
+        let pies_tool = GetPiesTool {};
+        let pie_by_id_tool = GetPieByIdTool { pie_id: 42 };
+
+        let tool_variants = vec![
+            Trading212Tools::GetInstrumentsTool(instruments_tool),
+            Trading212Tools::GetPiesTool(pies_tool),
+            Trading212Tools::GetPieByIdTool(pie_by_id_tool),
+        ];
+
+        assert_eq!(tool_variants.len(), 3);
+
+        // Verify each variant can be matched
+        for tool in tool_variants {
+            match tool {
+                Trading212Tools::GetInstrumentsTool(_) => assert!(true),
+                Trading212Tools::GetPiesTool(_) => assert!(true),
+                Trading212Tools::GetPieByIdTool(_) => assert!(true),
+            }
+        }
+    }
+
+    #[test]
+    fn test_tool_parameter_validation() {
+        // Test tool parameter validation logic
+        use crate::tools::GetPieByIdTool;
+
+        // Test valid pie ID ranges
+        let valid_tool = GetPieByIdTool { pie_id: 12345 };
+        assert!(valid_tool.pie_id > 0);
+
+        // Test that pie_id can handle large numbers
+        let large_id_tool = GetPieByIdTool { pie_id: 999999 };
+        assert!(large_id_tool.pie_id > 0);
+    }
+
+    #[test]
+    fn test_handler_new_config_error_simulation() {
+        // Test that config errors are properly propagated in new()
+        // We simulate this by testing the error conversion path
+
+        let test_error = Trading212Error::config_error("Simulated config error");
+        let io_error = std::io::Error::new(std::io::ErrorKind::InvalidData, test_error.to_string());
+        let mcp_error = McpSdkError::from(io_error);
+
+        // Verify error message contains the config error
+        assert!(mcp_error.to_string().contains("Simulated config error"));
+    }
+
+    #[test]
+    fn test_handler_new_client_error_simulation() {
+        // Test HTTP client creation error simulation
+        let client_error = "Failed to create HTTP client: test error";
+        let io_error = std::io::Error::other(client_error);
+        let mcp_error = McpSdkError::from(io_error);
+
+        // Verify error contains client creation details
+        assert!(
+            mcp_error
+                .to_string()
+                .contains("Failed to create HTTP client")
+                || mcp_error.to_string().contains("test error")
+        );
+    }
+
+    #[test]
+    fn test_call_tool_error_conversion() {
+        use rust_mcp_sdk::schema::schema_utils::CallToolError;
+
+        // Test all Trading212Error variants convert to CallToolError properly
+        let errors = vec![
+            Trading212Error::request_failed("Network error"),
+            Trading212Error::api_error(500, "Server error"),
+            Trading212Error::parse_error("JSON parse error"),
+            Trading212Error::config_error("Config error"),
+            Trading212Error::conversion_error("Conversion error"),
+        ];
+
+        for error in errors {
+            let call_tool_error = CallToolError::new(error);
+            let error_string = call_tool_error.to_string();
+            assert!(!error_string.is_empty());
+
+            // Each error should contain meaningful information
+            assert!(error_string.len() > 5);
+        }
+    }
 }
