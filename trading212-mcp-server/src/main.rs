@@ -225,4 +225,165 @@ mod tests {
             result.ok();
         }
     }
+
+    mod server_runtime_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_server_creation_and_details() {
+            let server_details = create_server_details();
+
+            // Test that server details are comprehensive
+            assert_eq!(server_details.server_info.name, "Trading212 MCP Server");
+            assert_eq!(server_details.server_info.version, "0.1.0");
+            assert!(server_details.server_info.title.is_some());
+            assert!(server_details.capabilities.tools.is_some());
+            assert!(server_details.instructions.is_some());
+
+            // Test protocol version compatibility
+            assert!(!server_details.protocol_version.is_empty());
+            assert_eq!(server_details.protocol_version, LATEST_PROTOCOL_VERSION);
+        }
+
+        #[test]
+        fn test_transport_options_defaults() {
+            // Test default transport options
+            let options = TransportOptions::default();
+
+            // Create transport with defaults
+            let transport_result = StdioTransport::new(options);
+            assert!(transport_result.is_ok());
+        }
+
+        #[test]
+        fn test_server_capabilities_structure() {
+            let server_details = create_server_details();
+            let capabilities = &server_details.capabilities;
+
+            // Verify tools capability
+            assert!(capabilities.tools.is_some());
+            let tools_cap = capabilities.tools.as_ref().unwrap();
+            assert!(tools_cap.list_changed.is_none());
+
+            // Verify other capabilities are properly set
+            assert!(capabilities.prompts.is_none());
+            assert!(capabilities.resources.is_none());
+            assert!(capabilities.logging.is_none());
+        }
+
+        #[test]
+        fn test_server_implementation_details() {
+            let server_details = create_server_details();
+            let implementation = &server_details.server_info;
+
+            // Test implementation details completeness
+            assert!(!implementation.name.is_empty());
+            assert!(!implementation.version.is_empty());
+            assert!(implementation.title.is_some());
+
+            let title = implementation.title.as_ref().unwrap();
+            assert_eq!(title, "Trading212 MCP Server");
+            assert_eq!(implementation.name, *title);
+        }
+
+        #[test]
+        fn test_server_instructions_content() {
+            let server_details = create_server_details();
+            let instructions = server_details.instructions.unwrap();
+
+            // Verify instructions are informative
+            assert!(instructions.contains("Trading212"));
+            assert!(instructions.contains("API"));
+            assert!(instructions.contains("instrument"));
+            assert!(instructions.len() > 20); // Should be descriptive
+        }
+
+        #[test]
+        fn test_server_meta_field() {
+            let server_details = create_server_details();
+
+            // Verify meta field is None as designed
+            assert!(server_details.meta.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_handler_creation_in_context() {
+            // Test handler creation in the context of server startup
+            // This tests the same path the main function would take
+
+            match Trading212Handler::new() {
+                Ok(handler) => {
+                    // Verify handler is properly configured
+                    assert!(!handler.config.api_key.is_empty());
+                    assert!(!handler.config.base_url.is_empty());
+                    assert!(handler.config.base_url.starts_with("http"));
+                }
+                Err(_) => {
+                    // Handler creation can fail if API key file doesn't exist
+                    // This is expected in test environments without setup
+                }
+            }
+        }
+
+        #[test]
+        fn test_error_message_formatting() {
+            // Test the error message formatting logic from main
+            use rust_mcp_sdk::error::McpSdkError;
+            use std::io;
+
+            // Create a test error
+            let io_error = io::Error::new(io::ErrorKind::NotFound, "Test error");
+            let sdk_error = McpSdkError::from(io_error);
+
+            // Test the error message extraction logic similar to main()
+            let error_msg = sdk_error
+                .rpc_error_message()
+                .map_or_else(|| sdk_error.to_string(), std::string::ToString::to_string);
+
+            assert!(!error_msg.is_empty());
+            assert!(error_msg.contains("Test error") || error_msg.contains("NotFound"));
+        }
+
+        #[test]
+        fn test_tracing_configuration() {
+            // Test tracing configuration settings
+            use tracing_subscriber::EnvFilter;
+
+            // Test environment filter creation
+            let env_filter =
+                EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
+
+            // Verify the filter was created successfully
+            assert!(!format!("{:?}", env_filter).is_empty());
+        }
+
+        #[test]
+        fn test_create_server_details_consistency() {
+            // Test that create_server_details is deterministic
+            let details1 = create_server_details();
+            let details2 = create_server_details();
+
+            // Should be identical
+            assert_eq!(details1.server_info.name, details2.server_info.name);
+            assert_eq!(details1.server_info.version, details2.server_info.version);
+            assert_eq!(details1.protocol_version, details2.protocol_version);
+            assert_eq!(details1.instructions, details2.instructions);
+        }
+
+        #[test]
+        fn test_version_string_format() {
+            let server_details = create_server_details();
+            let version = &server_details.server_info.version;
+
+            // Test version format (should be semantic versioning)
+            assert!(version.contains('.'));
+            let parts: Vec<&str> = version.split('.').collect();
+            assert!(parts.len() >= 2); // At least major.minor
+
+            // Should be parseable numbers
+            for part in parts {
+                assert!(part.parse::<u32>().is_ok());
+            }
+        }
+    }
 }

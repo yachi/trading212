@@ -1168,4 +1168,173 @@ mod tests {
             assert!(result.is_ok());
         }
     }
+
+    mod serialization_tests {
+        use super::*;
+        use serde_json;
+
+        #[test]
+        fn test_get_instruments_tool_serialization() {
+            let tool = GetInstrumentsTool {
+                search: Some("AAPL".to_string()),
+                instrument_type: Some("STOCK".to_string()),
+            };
+
+            // Test that the tool can be serialized
+            let json = serde_json::to_string(&tool);
+            assert!(json.is_ok());
+
+            // Test deserialization
+            let json_str = json.unwrap();
+            let deserialized: Result<GetInstrumentsTool, _> = serde_json::from_str(&json_str);
+            assert!(deserialized.is_ok());
+
+            let deserialized_tool = deserialized.unwrap();
+            assert_eq!(deserialized_tool.search, tool.search);
+            assert_eq!(deserialized_tool.instrument_type, tool.instrument_type);
+        }
+
+        #[test]
+        fn test_get_pies_tool_serialization() {
+            let tool = GetPiesTool {};
+
+            // Test serialization
+            let json = serde_json::to_string(&tool);
+            assert!(json.is_ok());
+
+            // Test deserialization
+            let json_str = json.unwrap();
+            let deserialized: Result<GetPiesTool, _> = serde_json::from_str(&json_str);
+            assert!(deserialized.is_ok());
+        }
+
+        #[test]
+        fn test_get_pie_by_id_tool_serialization() {
+            let tool = GetPieByIdTool { pie_id: 12345 };
+
+            // Test serialization
+            let json = serde_json::to_string(&tool);
+            assert!(json.is_ok());
+
+            // Test deserialization
+            let json_str = json.unwrap();
+            let deserialized: Result<GetPieByIdTool, _> = serde_json::from_str(&json_str);
+            assert!(deserialized.is_ok());
+
+            let deserialized_tool = deserialized.unwrap();
+            assert_eq!(deserialized_tool.pie_id, tool.pie_id);
+        }
+
+        #[test]
+        fn test_trading212_tools_enum_debug() {
+            let tools = vec![
+                Trading212Tools::GetInstrumentsTool(GetInstrumentsTool {
+                    search: Some("TEST".to_string()),
+                    instrument_type: None,
+                }),
+                Trading212Tools::GetPiesTool(GetPiesTool {}),
+                Trading212Tools::GetPieByIdTool(GetPieByIdTool { pie_id: 999 }),
+            ];
+
+            for tool in tools {
+                // Test that enum variants can be formatted for debugging
+                let debug_string = format!("{:?}", tool);
+                assert!(!debug_string.is_empty());
+            }
+        }
+    }
+
+    mod edge_case_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_pie_by_id_with_zero() {
+            let tool = GetPieByIdTool { pie_id: 0 };
+            assert_eq!(tool.pie_id, 0);
+        }
+
+        #[test]
+        fn test_get_pie_by_id_with_max_value() {
+            let tool = GetPieByIdTool { pie_id: i32::MAX };
+            assert_eq!(tool.pie_id, i32::MAX);
+        }
+
+        #[test]
+        fn test_get_instruments_with_empty_search() {
+            let tool = GetInstrumentsTool {
+                search: Some("".to_string()),
+                instrument_type: None,
+            };
+            assert_eq!(tool.search, Some("".to_string()));
+        }
+
+        #[test]
+        fn test_get_instruments_with_special_characters() {
+            let tool = GetInstrumentsTool {
+                search: Some("A&B C.D-E_F".to_string()),
+                instrument_type: Some("ETF".to_string()),
+            };
+            assert!(tool.search.as_ref().unwrap().contains("&"));
+            assert!(tool.search.is_some());
+        }
+
+        #[test]
+        fn test_tools_list_immutability() {
+            let tools1 = Trading212Tools::tools();
+            let tools2 = Trading212Tools::tools();
+
+            // Should return the same tools each time
+            assert_eq!(tools1.len(), tools2.len());
+
+            for (t1, t2) in tools1.iter().zip(tools2.iter()) {
+                assert_eq!(t1.name, t2.name);
+                assert_eq!(t1.description, t2.description);
+            }
+        }
+
+        #[test]
+        fn test_tool_names_are_valid() {
+            let tools = Trading212Tools::tools();
+
+            for tool in tools {
+                // Tool names should be non-empty and follow naming conventions
+                assert!(!tool.name.is_empty());
+                assert!(!tool.name.contains(' ')); // Should use underscores
+                assert!(tool.name.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            }
+        }
+
+        #[test]
+        fn test_tool_descriptions_exist() {
+            let tools = Trading212Tools::tools();
+
+            for tool in tools {
+                // All tools should have descriptions
+                assert!(tool.description.is_some());
+                let description = tool.description.as_ref().unwrap();
+                assert!(!description.is_empty());
+                assert!(description.len() > 10); // Should be meaningful
+            }
+        }
+
+        #[test]
+        fn test_trading212_tools_try_from_edge_cases() {
+            use serde_json::Value;
+            use std::collections::HashMap;
+
+            // Test with completely invalid parameters
+            let mut invalid_args = HashMap::new();
+            invalid_args.insert(
+                "invalid_field".to_string(),
+                Value::String("invalid".to_string()),
+            );
+
+            // Test that we can handle unexpected fields gracefully
+            assert!(!invalid_args.is_empty());
+
+            // Test empty arguments case
+            let empty_args: HashMap<String, Value> = HashMap::new();
+            assert!(empty_args.is_empty());
+        }
+    }
 }

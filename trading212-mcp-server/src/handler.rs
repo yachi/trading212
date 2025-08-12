@@ -333,4 +333,27 @@ mod tests {
             assert!(!error_string.is_empty());
         }
     }
+
+    #[test]
+    fn test_handler_struct_fields() {
+        let handler = create_test_handler();
+
+        // Test that handler fields are accessible and properly configured
+        assert!(!handler.config.api_key.is_empty());
+        assert!(!handler.config.base_url.is_empty());
+
+        // Test client exists and is valid size
+        assert!(std::mem::size_of_val(&handler.client) > 0);
+    }
+
+    #[test]
+    fn test_handler_struct_debug() {
+        let handler = create_test_handler();
+
+        // Test that handler config can be debugged
+        let debug_string = format!("{:?}", handler.config);
+        assert!(debug_string.contains("Trading212Config"));
+        assert!(debug_string.contains("api_key"));
+        assert!(debug_string.contains("base_url"));
+    }
 }
