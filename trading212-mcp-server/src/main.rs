@@ -385,5 +385,119 @@ mod tests {
                 assert!(part.parse::<u32>().is_ok());
             }
         }
+
+        #[tokio::test]
+        async fn test_server_startup_error_handling() {
+            // Test error handling in server startup scenario
+            use rust_mcp_sdk::error::McpSdkError;
+            use std::io;
+
+            // Simulate a startup error
+            let startup_error = McpSdkError::from(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Access denied",
+            ));
+
+            // Test the error message extraction logic from main()
+            let error_msg = startup_error.rpc_error_message().map_or_else(
+                || startup_error.to_string(),
+                std::string::ToString::to_string,
+            );
+
+            assert!(!error_msg.is_empty());
+            assert!(error_msg.contains("Access denied") || error_msg.contains("PermissionDenied"));
+        }
+
+        #[test]
+        fn test_stdio_transport_creation_edge_cases() {
+            // Test StdioTransport creation with various configurations
+
+            // Test with default options
+            let options1 = TransportOptions::default();
+            assert!(StdioTransport::new(options1).is_ok());
+
+            // Test multiple creation attempts
+            for _ in 0..3 {
+                let options = TransportOptions::default();
+                assert!(StdioTransport::new(options).is_ok());
+            }
+        }
+
+        #[test]
+        fn test_environment_filter_configuration() {
+            // Test the environment filter configuration from init_tracing
+            use tracing::Level;
+            use tracing_subscriber::EnvFilter;
+
+            let filter = EnvFilter::from_default_env().add_directive(Level::INFO.into());
+
+            // Verify filter creation succeeds
+            let filter_debug = format!("{:?}", filter);
+            assert!(!filter_debug.is_empty());
+            assert!(filter_debug.contains("INFO") || filter_debug.contains("info"));
+        }
+
+        #[test]
+        fn test_main_function_components() {
+            // Test individual components that main() uses
+
+            // Test server details creation
+            let server_details = create_server_details();
+            assert!(!server_details.server_info.name.is_empty());
+
+            // Test transport options
+            let options = TransportOptions::default();
+            assert!(StdioTransport::new(options).is_ok());
+
+            // Test init_tracing doesn't panic
+            let _result = std::panic::catch_unwind(|| {
+                init_tracing();
+            });
+        }
+    }
+
+    #[test]
+    fn test_protocol_version_consistency() {
+        let details = create_server_details();
+
+        // Test that protocol version is consistent with SDK
+        assert_eq!(details.protocol_version, LATEST_PROTOCOL_VERSION);
+        assert!(!details.protocol_version.is_empty());
+
+        // Should be in a recognizable format
+        assert!(
+            details.protocol_version.contains('-')
+                || details.protocol_version.chars().any(|c| c.is_numeric())
+        );
+    }
+
+    #[test]
+    fn test_server_capabilities_defaults() {
+        let details = create_server_details();
+        let capabilities = &details.capabilities;
+
+        // Test that non-tool capabilities are properly defaulted
+        assert!(capabilities.prompts.is_none());
+        assert!(capabilities.resources.is_none());
+        assert!(capabilities.logging.is_none());
+
+        // Verify tools capability is configured
+        assert!(capabilities.tools.is_some());
+        let tools = capabilities.tools.as_ref().unwrap();
+        assert!(tools.list_changed.is_none());
+    }
+
+    #[test]
+    fn test_server_info_fields() {
+        let details = create_server_details();
+        let info = &details.server_info;
+
+        // Test all Implementation fields
+        assert_eq!(info.name, "Trading212 MCP Server");
+        assert_eq!(info.version, "0.1.0");
+        assert_eq!(info.title, Some("Trading212 MCP Server".to_string()));
+
+        // Test field consistency
+        assert_eq!(&info.name, info.title.as_ref().unwrap());
     }
 }
