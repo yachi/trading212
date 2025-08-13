@@ -5,6 +5,10 @@ edition = "2021"
 description = "MCP server for Trading212 API integration"
 license = "MIT"
 
+[lib]
+name = "trading212_mcp_server"
+path = "src/lib.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
