@@ -447,8 +447,8 @@ mod tests {
 
         // Test GetPiesTool creation
         let pies_tool = GetPiesTool {};
-        // Just verify it exists and can be created
-        assert!(std::mem::size_of_val(&pies_tool) >= 0);
+        // Just verify it exists and can be created (GetPiesTool is a unit struct)
+        assert_eq!(std::mem::size_of_val(&pies_tool), 0);
 
         // Test GetPieByIdTool creation
         let pie_by_id_tool = GetPieByIdTool { pie_id: 123 };
@@ -554,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_tool_execution_real_world_simulation() {
         // Test the async tool execution paths that are covered by the ServerHandler methods
-        let handler = create_test_handler();
+        let _handler = create_test_handler();
 
         // Test tool creation and execution through the Trading212Tools enum
         use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
@@ -732,5 +732,61 @@ mod tests {
         // Test handler initialization logging components
         assert!(handler.config.base_url.starts_with("http"));
         assert!(!handler.config.api_key.is_empty());
+    }
+
+    #[test]
+    fn test_handler_server_trait_bounds() {
+        // Test that Trading212Handler implements ServerHandler trait correctly
+        let handler = create_test_handler();
+
+        // Test that handler can be used where ServerHandler is required
+        fn requires_server_handler(_: &dyn ServerHandler) {}
+        requires_server_handler(&handler);
+
+        // Test that the handler has the expected traits
+        assert!(std::mem::size_of::<Trading212Handler>() > 0);
+
+        // Verify handler implements Send and Sync for async usage
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Trading212Handler>();
+    }
+
+    #[test]
+    fn test_handler_error_path_coverage() {
+        // Test error handling paths that might not be covered
+        use crate::errors::Trading212Error;
+
+        // Test various error types that could occur in the handler
+        let api_error = Trading212Error::api_error(404, "Not found");
+        let conversion_error = Trading212Error::conversion_error("Invalid data");
+        let request_error = Trading212Error::request_failed("Network failure");
+
+        // Test that all error types can be converted to CallToolError
+        let _call_error_1 = CallToolError::new(api_error);
+        let _call_error_2 = CallToolError::new(conversion_error);
+        let _call_error_3 = CallToolError::new(request_error);
+
+        // Test string representations
+        let test_error = Trading212Error::config_error("Config loading failed");
+        assert!(test_error.to_string().contains("Config loading failed"));
+    }
+
+    #[test]
+    fn test_handler_configuration_edge_cases() {
+        // Test handler configuration paths
+        let handler = create_test_handler();
+
+        // Test endpoint URL building with various paths
+        let endpoint_tests = vec![("/test", "/test"), ("test", "/test"), ("", "/"), ("/", "/")];
+
+        for (input, expected) in endpoint_tests {
+            let url = handler.config.endpoint_url(input);
+            assert!(url.ends_with(expected), "Failed for input: {}", input);
+            assert!(url.contains("trading212"), "URL should contain trading212");
+        }
+
+        // Test config properties
+        assert!(!handler.config.api_key.is_empty());
+        assert!(handler.config.base_url.starts_with("http"));
     }
 }
