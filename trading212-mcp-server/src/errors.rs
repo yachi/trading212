@@ -14,7 +14,12 @@ pub enum Trading212Error {
     /// HTTP request failed
     RequestFailed(String),
     /// API returned an error response
-    ApiError { status: u16, message: String },
+    ApiError {
+        /// HTTP status code returned by the API
+        status: u16,
+        /// Error message from the API response
+        message: String,
+    },
     /// Failed to parse JSON response
     ParseError(String),
     /// Failed to serialize data

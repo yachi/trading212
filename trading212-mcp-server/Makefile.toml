@@ -1,0 +1,143 @@
+[config]
+default_to_workspace = false
+min_version = "0.37.0"
+
+[env]
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+
+# Main quality check task that runs all tools
+[tasks.quality]
+description = "Run all code quality checks (clippy, fmt, audit, machete)"
+dependencies = [
+    "fmt-check",
+    "clippy",
+    "audit",
+    "machete"
+]
+
+# Strict quality check that treats warnings as errors (for CI)
+[tasks.quality-strict]
+description = "Run strict quality checks treating warnings as errors"
+dependencies = [
+    "fmt-check",
+    "clippy-check",
+    "audit",
+    "machete"
+]
+
+# Individual tasks for each tool
+[tasks.fmt-check]
+description = "Check code formatting"
+command = "cargo"
+args = ["fmt", "--check"]
+
+[tasks.fmt]
+description = "Format code"
+command = "cargo"
+args = ["fmt"]
+
+[tasks.clippy-check]
+description = "Run clippy lints treating warnings as errors"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.clippy]
+description = "Run clippy lints (allow warnings for development)"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features"]
+
+[tasks.audit]
+description = "Run security audit"
+command = "cargo"
+args = ["audit"]
+install_crate = { crate_name = "cargo-audit", binary = "cargo", test_arg = "audit --help" }
+
+[tasks.machete]
+description = "Check for unused dependencies"
+command = "cargo"
+args = ["machete"]
+install_crate = { crate_name = "cargo-machete", binary = "cargo", test_arg = "machete --help" }
+
+# Test tasks
+[tasks.test]
+description = "Run all tests"
+command = "cargo"
+args = ["test"]
+
+[tasks.test-integration]
+description = "Run integration tests only"
+command = "cargo"
+args = ["test", "--test", "integration_tests"]
+
+[tasks.coverage]
+description = "Generate test coverage report"
+command = "cargo"
+args = ["llvm-cov", "--summary-only"]
+install_crate = { crate_name = "cargo-llvm-cov", binary = "cargo", test_arg = "llvm-cov --help" }
+
+# Build tasks
+[tasks.build]
+description = "Build the project"
+command = "cargo"
+args = ["build"]
+
+[tasks.build-release]
+description = "Build the project in release mode"
+command = "cargo"
+args = ["build", "--release"]
+
+# Combined development workflow tasks
+[tasks.dev]
+description = "Development workflow: format, clippy, test, build"
+dependencies = [
+    "fmt",
+    "clippy",
+    "test",
+    "build"
+]
+
+[tasks.ci]
+description = "CI workflow: quality checks, tests, coverage, build"
+dependencies = [
+    "quality",
+    "test",
+    "coverage",
+    "build-release"
+]
+
+# Fix tasks
+[tasks.fix]
+description = "Auto-fix issues where possible"
+dependencies = [
+    "fmt",
+    "clippy-fix"
+]
+
+[tasks.clippy-fix]
+description = "Run clippy with --fix flag"
+command = "cargo"
+args = ["clippy", "--fix", "--allow-dirty", "--allow-staged"]
+
+# Clean tasks
+[tasks.clean]
+description = "Clean build artifacts"
+command = "cargo"
+args = ["clean"]
+
+[tasks.clean-all]
+description = "Clean all artifacts including cargo cache"
+dependencies = ["clean"]
+script = [
+    "cargo clean",
+    "rm -rf target/"
+]
+
+# Install required tools
+[tasks.install-tools]
+description = "Install required cargo tools"
+script = [
+    "cargo install cargo-audit",
+    "cargo install cargo-machete",
+    "cargo install cargo-llvm-cov",
+    "cargo install cargo-make"
+]

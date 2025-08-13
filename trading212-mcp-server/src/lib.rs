@@ -2,6 +2,13 @@
 //!
 //! A Model Context Protocol (MCP) server that provides access to Trading212 API functionality.
 
+// Suppress unused crate dependency warnings for dev dependencies
+use tokio as _;
+use tracing_subscriber as _;
+
+#[cfg(test)]
+use criterion as _;
+
 pub mod config;
 pub mod errors;
 pub mod handler;

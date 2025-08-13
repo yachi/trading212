@@ -263,6 +263,7 @@ pub struct PieResult {
     open_world_hint = false,
     read_only_hint = true
 )]
+/// Tool for retrieving Trading212 financial instruments
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetInstrumentsTool {
     /// Optional search term to filter instruments
@@ -284,6 +285,7 @@ pub struct GetInstrumentsTool {
     open_world_hint = false,
     read_only_hint = true
 )]
+/// Tool for retrieving all Trading212 investment pies
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPiesTool {}
 
@@ -296,6 +298,7 @@ pub struct GetPiesTool {}
     open_world_hint = false,
     read_only_hint = true
 )]
+/// Tool for retrieving detailed information about a specific Trading212 investment pie
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPieByIdTool {
     /// The unique ID of the pie to retrieve
@@ -419,6 +422,7 @@ impl GetPieByIdTool {
     }
 }
 
+/// Enum containing all available Trading212 MCP tools
 tool_box! {
     Trading212Tools,
     [GetInstrumentsTool, GetPiesTool, GetPieByIdTool]
