@@ -63,9 +63,7 @@ fn benchmark_config_operations(c: &mut Criterion) {
     };
 
     group.bench_function("endpoint_url_generation", |b| {
-        b.iter(|| {
-            black_box(config.endpoint_url(black_box("/equity/metadata/instruments")))
-        })
+        b.iter(|| black_box(config.endpoint_url(black_box("/equity/metadata/instruments"))))
     });
 
     group.bench_function("endpoint_url_with_params", |b| {
@@ -202,9 +200,7 @@ fn benchmark_string_operations(c: &mut Criterion) {
 
     group.bench_function("api_key_validation", |b| {
         let api_key = "test_api_key_1234567890_abcdefghijklmnopqrstuvwxyz";
-        b.iter(|| {
-            black_box(!black_box(api_key).is_empty() && black_box(api_key).len() > 10)
-        })
+        b.iter(|| black_box(!black_box(api_key).is_empty() && black_box(api_key).len() > 10))
     });
 
     group.bench_function("endpoint_path_normalization", |b| {

@@ -88,11 +88,15 @@ impl Trading212Config {
 
     /// Get the full URL for an endpoint
     pub fn endpoint_url(&self, endpoint: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            endpoint.trim_start_matches('/')
-        )
+        let base = self.base_url.trim_end_matches('/');
+        let endpoint = endpoint.trim_start_matches('/');
+
+        // Pre-allocate with exact capacity to avoid reallocations
+        let mut url = String::with_capacity(base.len() + endpoint.len() + 1);
+        url.push_str(base);
+        url.push('/');
+        url.push_str(endpoint);
+        url
     }
 }
 

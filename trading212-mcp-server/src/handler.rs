@@ -42,6 +42,8 @@ impl Trading212Handler {
 
         let client = Client::builder()
             .user_agent("Trading212-MCP-Server/0.1.0")
+            .pool_max_idle_per_host(2) // Optimize connection pooling
+            .timeout(std::time::Duration::from_secs(30)) // Prevent hanging requests
             .build()
             .map_err(|e| {
                 McpSdkError::from(std::io::Error::other(format!(
@@ -495,7 +497,7 @@ mod tests {
         assert!(valid_tool.pie_id > 0);
 
         // Test that pie_id can handle large numbers
-        let large_id_tool = GetPieByIdTool { pie_id: 999999 };
+        let large_id_tool = GetPieByIdTool { pie_id: 999_999 };
         assert!(large_id_tool.pie_id > 0);
     }
 

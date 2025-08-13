@@ -19,22 +19,36 @@ fn build_instruments_url(
     search: Option<&String>,
     instrument_type: Option<&String>,
 ) -> String {
-    let mut url = config.endpoint_url("equity/metadata/instruments");
-    let mut params = Vec::new();
+    let base_url = config.endpoint_url("equity/metadata/instruments");
 
-    if let Some(search) = search {
-        params.push(format!("search={}", urlencoding::encode(search)));
+    // Optimize for the common cases without Vec allocation
+    match (search, instrument_type) {
+        (None, None) => base_url,
+        (Some(search), None) => {
+            let mut url = String::with_capacity(base_url.len() + search.len() + 8);
+            url.push_str(&base_url);
+            url.push_str("?search=");
+            url.push_str(&urlencoding::encode(search));
+            url
+        }
+        (None, Some(instrument_type)) => {
+            let mut url = String::with_capacity(base_url.len() + instrument_type.len() + 6);
+            url.push_str(&base_url);
+            url.push_str("?type=");
+            url.push_str(&urlencoding::encode(instrument_type));
+            url
+        }
+        (Some(search), Some(instrument_type)) => {
+            let mut url =
+                String::with_capacity(base_url.len() + search.len() + instrument_type.len() + 15);
+            url.push_str(&base_url);
+            url.push_str("?search=");
+            url.push_str(&urlencoding::encode(search));
+            url.push_str("&type=");
+            url.push_str(&urlencoding::encode(instrument_type));
+            url
+        }
     }
-    if let Some(t) = instrument_type {
-        params.push(format!("type={}", urlencoding::encode(t)));
-    }
-
-    if !params.is_empty() {
-        url.push('?');
-        url.push_str(&params.join("&"));
-    }
-
-    url
 }
 
 /// Helper function to serialize data and create a formatted MCP text response.
@@ -1127,7 +1141,7 @@ mod tests {
             use std::collections::HashMap;
 
             let test_data: HashMap<String, i32> = HashMap::new();
-            let result = create_json_response(&test_data, "items", 999999);
+            let result = create_json_response(&test_data, "items", 999_999);
 
             assert!(result.is_ok());
             let response = result.unwrap();
@@ -1171,7 +1185,6 @@ mod tests {
 
     mod serialization_tests {
         use super::*;
-        use serde_json;
 
         #[test]
         fn test_get_instruments_tool_serialization() {
