@@ -305,6 +305,40 @@ pub struct GetPieByIdTool {
     pub pie_id: i32,
 }
 
+#[mcp_tool(
+    name = "update_pie",
+    description = "Update an existing Trading212 investment pie configuration",
+    title = "Update Trading212 Investment Pie",
+    idempotent_hint = false,
+    destructive_hint = false,
+    open_world_hint = false,
+    read_only_hint = false
+)]
+/// Tool for updating an existing Trading212 investment pie
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdatePieTool {
+    /// The unique ID of the pie to update
+    pub pie_id: i32,
+    /// Updated instrument allocations (ticker -> weight percentage as decimal 0.0-1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instrument_shares: Option<std::collections::HashMap<String, f64>>,
+    /// Updated pie name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Updated pie icon
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Updated target goal amount
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<f64>,
+    /// Updated dividend cash action (REINVEST or WITHDRAW)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_cash_action: Option<String>,
+    /// Updated end date (ISO 8601 format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+}
+
 impl GetInstrumentsTool {
     /// Execute the `get_instruments` tool.
     ///
@@ -422,10 +456,119 @@ impl GetPieByIdTool {
     }
 }
 
+impl UpdatePieTool {
+    /// Execute the `update_pie` tool.
+    ///
+    /// Updates an existing investment pie configuration in Trading212 API.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - HTTP client for making API requests
+    /// * `config` - Trading212 configuration containing API credentials
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API request fails, response parsing fails,
+    /// or serialization of the results fails.
+    pub async fn call_tool(
+        &self,
+        client: &Client,
+        config: &Trading212Config,
+    ) -> Result<CallToolResult, CallToolError> {
+        tracing::debug!(pie_id = self.pie_id, "Executing update_pie tool");
+
+        let url = config.endpoint_url(&format!("equity/pies/{}", self.pie_id));
+
+        // Build request body with only the fields that are being updated
+        let mut request_body = serde_json::Map::new();
+
+        if let Some(ref instrument_shares) = self.instrument_shares {
+            let value = serde_json::to_value(instrument_shares).map_err(|e| {
+                CallToolError::new(Trading212Error::serialization_error(format!(
+                    "Failed to serialize instrument_shares: {e}"
+                )))
+            })?;
+            request_body.insert("instrumentShares".to_string(), value);
+        }
+
+        if let Some(ref name) = self.name {
+            request_body.insert("name".to_string(), serde_json::Value::String(name.clone()));
+        }
+
+        if let Some(ref icon) = self.icon {
+            request_body.insert("icon".to_string(), serde_json::Value::String(icon.clone()));
+        }
+
+        if let Some(goal) = self.goal {
+            let number = serde_json::Number::from_f64(goal).ok_or_else(|| {
+                CallToolError::new(Trading212Error::serialization_error(
+                    "Invalid goal value".to_string(),
+                ))
+            })?;
+            request_body.insert("goal".to_string(), serde_json::Value::Number(number));
+        }
+
+        if let Some(ref dividend_cash_action) = self.dividend_cash_action {
+            request_body.insert(
+                "dividendCashAction".to_string(),
+                serde_json::Value::String(dividend_cash_action.clone()),
+            );
+        }
+
+        if let Some(ref end_date) = self.end_date {
+            request_body.insert(
+                "endDate".to_string(),
+                serde_json::Value::String(end_date.clone()),
+            );
+        }
+
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", config.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| {
+                CallToolError::new(Trading212Error::request_failed(format!(
+                    "HTTP request failed: {e}"
+                )))
+            })?;
+
+        let status = response.status();
+        let response_text = response.text().await.map_err(|e| {
+            CallToolError::new(Trading212Error::request_failed(format!(
+                "Failed to read response: {e}"
+            )))
+        })?;
+
+        if !status.is_success() {
+            tracing::error!(
+                status_code = status.as_u16(),
+                response_body = response_text,
+                "API returned non-success status"
+            );
+            return Err(CallToolError::new(Trading212Error::api_error(
+                status.as_u16(),
+                response_text,
+            )));
+        }
+
+        let pie: PieResult = serde_json::from_str(&response_text).map_err(|e| {
+            CallToolError::new(Trading212Error::parse_error(format!(
+                "Failed to parse JSON response: {e}. Response body: {response_text}"
+            )))
+        })?;
+
+        tracing::info!(pie_id = self.pie_id, "Successfully updated pie");
+        create_single_item_response(&pie, "investment pie")
+    }
+}
+
 /// Enum containing all available Trading212 MCP tools
 tool_box! {
     Trading212Tools,
-    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool]
+    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool]
 }
 
 #[cfg(test)]

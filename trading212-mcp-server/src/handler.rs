@@ -121,6 +121,9 @@ impl ServerHandler for Trading212Handler {
                     .call_tool(&self.client, &self.config)
                     .await
             }
+            Trading212Tools::UpdatePieTool(update_pie_tool) => {
+                update_pie_tool.call_tool(&self.client, &self.config).await
+            }
         };
 
         match &result {
@@ -182,7 +185,7 @@ mod tests {
     fn test_handler_tools_list() {
         // Test that tools list is correctly structured
         let tools = Trading212Tools::tools();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"get_instruments"));
@@ -242,7 +245,7 @@ mod tests {
         // Test that all expected tools are present and properly configured
         let tools = Trading212Tools::tools();
 
-        assert_eq!(tools.len(), 3, "Expected exactly 3 tools");
+        assert_eq!(tools.len(), 4, "Expected exactly 4 tools");
 
         // Verify each tool has required properties
         for tool in &tools {
@@ -250,7 +253,7 @@ mod tests {
 
             // Verify tool names match expected values
             match tool.name.as_str() {
-                "get_instruments" | "get_pies" | "get_pie_by_id" => {
+                "get_instruments" | "get_pies" | "get_pie_by_id" | "update_pie" => {
                     // Expected tool names
                 }
                 _ => panic!("Unexpected tool name: {}", tool.name),
@@ -402,7 +405,7 @@ mod tests {
         let tools_list = Trading212Tools::tools();
 
         // Test that we can get the tools list (simulating the handler behavior)
-        assert_eq!(tools_list.len(), 3);
+        assert_eq!(tools_list.len(), 4);
         assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
         assert!(tools_list.iter().any(|t| t.name == "get_pies"));
         assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
@@ -426,7 +429,7 @@ mod tests {
 
         // Test that all tool variants exist in the tools list
         let tools_list = Trading212Tools::tools();
-        assert_eq!(tools_list.len(), 3);
+        assert_eq!(tools_list.len(), 4);
 
         let tool_names: Vec<&str> = tools_list.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"get_instruments"));
@@ -460,7 +463,7 @@ mod tests {
     #[test]
     fn test_tool_enum_variants() {
         // Test that we can create all Trading212Tools variants
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
+        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool, UpdatePieTool};
 
         let instruments_tool = GetInstrumentsTool {
             search: None,
@@ -468,14 +471,24 @@ mod tests {
         };
         let pies_tool = GetPiesTool {};
         let pie_by_id_tool = GetPieByIdTool { pie_id: 42 };
+        let update_pie_tool = UpdatePieTool {
+            pie_id: 12345,
+            instrument_shares: None,
+            name: Some("Test Update".to_string()),
+            icon: None,
+            goal: None,
+            dividend_cash_action: None,
+            end_date: None,
+        };
 
         let tool_variants = vec![
             Trading212Tools::GetInstrumentsTool(instruments_tool),
             Trading212Tools::GetPiesTool(pies_tool),
             Trading212Tools::GetPieByIdTool(pie_by_id_tool),
+            Trading212Tools::UpdatePieTool(update_pie_tool),
         ];
 
-        assert_eq!(tool_variants.len(), 3);
+        assert_eq!(tool_variants.len(), 4);
 
         // Verify each variant can be matched
         for tool in tool_variants {
@@ -483,6 +496,7 @@ mod tests {
                 Trading212Tools::GetInstrumentsTool(_) => assert!(true),
                 Trading212Tools::GetPiesTool(_) => assert!(true),
                 Trading212Tools::GetPieByIdTool(_) => assert!(true),
+                Trading212Tools::UpdatePieTool(_) => assert!(true),
             }
         }
     }
@@ -593,12 +607,16 @@ mod tests {
                     // This would call tool.call_tool(&client, &config).await in real handler
                     assert!(true);
                 }
+                Trading212Tools::UpdatePieTool(_tool) => {
+                    // This would call tool.call_tool(&client, &config).await in real handler
+                    assert!(true);
+                }
             }
         }
 
         // Test tools list generation (covers the handle_list_tools_request path)
         let tools_list = Trading212Tools::tools();
-        assert_eq!(tools_list.len(), 3);
+        assert_eq!(tools_list.len(), 4);
         assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
         assert!(tools_list.iter().any(|t| t.name == "get_pies"));
         assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
@@ -712,6 +730,10 @@ mod tests {
                     // Would call tool.call_tool(&self.client, &self.config).await
                     assert!(true);
                 }
+                Trading212Tools::UpdatePieTool(_) => {
+                    // Would call tool.call_tool(&self.client, &self.config).await
+                    assert!(true);
+                }
             }
         }
     }
@@ -726,7 +748,7 @@ mod tests {
 
         // Simulate the debug logging from handle_list_tools_request
         let tool_names: Vec<_> = test_tools.iter().map(|t| &t.name).collect();
-        assert_eq!(tool_names.len(), 3);
+        assert_eq!(tool_names.len(), 4);
         assert!(tool_names.contains(&&"get_instruments".to_string()));
         assert!(tool_names.contains(&&"get_pies".to_string()));
         assert!(tool_names.contains(&&"get_pie_by_id".to_string()));

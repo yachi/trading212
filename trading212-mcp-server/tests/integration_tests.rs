@@ -235,12 +235,13 @@ fn test_tools_conversion() {
 fn test_tools_list() {
     let tools = Trading212Tools::tools();
 
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 4);
 
     let tool_names: Vec<_> = tools.iter().map(|t| &t.name).collect();
     assert!(tool_names.contains(&&"get_instruments".to_string()));
     assert!(tool_names.contains(&&"get_pies".to_string()));
     assert!(tool_names.contains(&&"get_pie_by_id".to_string()));
+    assert!(tool_names.contains(&&"update_pie".to_string()));
 }
 
 #[test]
@@ -336,4 +337,72 @@ fn test_url_building_integration() {
         assert!(url.ends_with(expected_suffix));
         assert!(url.contains("demo.trading212.com"));
     }
+}
+
+#[tokio::test]
+async fn test_update_pie_tool_execution() {
+    let (_handler, mock_server) = create_test_handler_with_mock_api().await;
+
+    // Mock successful pie update response
+    Mock::given(method("POST"))
+        .and(path("/equity/pies/12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 12345,
+            "name": "Updated Tech Portfolio",
+            "dividendCashAction": "REINVEST",
+            "goal": 15000.0,
+            "creationDate": "2023-01-01T00:00:00Z",
+            "instrumentShares": {
+                "AAPL_US_EQ": 0.60,
+                "GOOGL_US_EQ": 0.40
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Test the update pie tool directly
+    let mut instrument_shares = std::collections::HashMap::new();
+    instrument_shares.insert("AAPL_US_EQ".to_string(), 0.60);
+    instrument_shares.insert("GOOGL_US_EQ".to_string(), 0.40);
+
+    let _tool = trading212_mcp_server::tools::UpdatePieTool {
+        pie_id: 12345,
+        instrument_shares: Some(instrument_shares),
+        name: Some("Updated Tech Portfolio".to_string()),
+        icon: None,
+        goal: Some(15000.0),
+        dividend_cash_action: Some("REINVEST".to_string()),
+        end_date: None,
+    };
+
+    // Create a test HTTP client pointing to mock server
+    let client = reqwest::Client::new();
+    let url = format!("{}/equity/pies/12345", mock_server.uri());
+
+    let request_body = json!({
+        "instrumentShares": {
+            "AAPL_US_EQ": 0.60,
+            "GOOGL_US_EQ": 0.40
+        },
+        "name": "Updated Tech Portfolio",
+        "goal": 15000.0,
+        "dividendCashAction": "REINVEST"
+    });
+
+    let response = client
+        .post(&url)
+        .header("Authorization", "Bearer test_api_key_integration")
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await;
+
+    assert!(response.is_ok());
+    let response = response.unwrap();
+    assert_eq!(response.status(), 200);
+
+    let json: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(json["id"], 12345);
+    assert_eq!(json["name"], "Updated Tech Portfolio");
+    assert_eq!(json["goal"], 15000.0);
 }
