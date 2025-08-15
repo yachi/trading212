@@ -10,6 +10,7 @@ use rust_mcp_sdk::{
     tool_box,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::{config::Trading212Config, errors::Trading212Error};
 
@@ -254,6 +255,84 @@ pub struct PieResult {
     pub price_avg_result_coef: f64,
 }
 
+/// Instrument allocation for pie updates
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct InstrumentAllocation {
+    /// Stock ticker symbol
+    pub ticker: String,
+    /// Allocation weight as decimal between 0.0 and 1.0
+    pub weight: f64,
+}
+
+/// Issue details for an instrument
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstrumentIssue {
+    /// Issue name
+    pub name: String,
+    /// Issue severity
+    pub severity: String,
+}
+
+/// Represents a single instrument within a pie
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PieInstrument {
+    /// Stock ticker symbol
+    pub ticker: String,
+    /// Performance results for this instrument
+    pub result: PieResult,
+    /// Expected allocation percentage
+    #[serde(rename = "expectedShare")]
+    pub expected_share: f64,
+    /// Current allocation percentage
+    #[serde(rename = "currentShare")]
+    pub current_share: f64,
+    /// Number of shares owned
+    #[serde(rename = "ownedQuantity")]
+    pub owned_quantity: f64,
+    /// Any issues with this instrument (can be empty array or objects)
+    pub issues: serde_json::Value,
+}
+
+/// Pie settings configuration
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PieSettings {
+    /// Unique identifier for the pie
+    pub id: i32,
+    /// Instrument allocations (null for detailed responses)
+    #[serde(rename = "instrumentShares")]
+    pub instrument_shares: Option<serde_json::Value>,
+    /// Pie name
+    pub name: String,
+    /// Pie icon
+    pub icon: String,
+    /// Target goal amount
+    pub goal: f64,
+    /// Creation date as timestamp
+    #[serde(rename = "creationDate")]
+    pub creation_date: f64,
+    /// End date for the pie
+    #[serde(rename = "endDate")]
+    pub end_date: String,
+    /// Initial investment amount
+    #[serde(rename = "initialInvestment")]
+    pub initial_investment: f64,
+    /// Dividend cash action
+    #[serde(rename = "dividendCashAction")]
+    pub dividend_cash_action: String,
+    /// Public URL (if any)
+    #[serde(rename = "publicUrl")]
+    pub public_url: Option<String>,
+}
+
+/// Complete pie details response from update pie API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DetailedPieResponse {
+    /// List of instruments in the pie
+    pub instruments: Vec<PieInstrument>,
+    /// Pie settings and configuration
+    pub settings: PieSettings,
+}
+
 #[mcp_tool(
     name = "get_instruments",
     description = "Get list of all tradeable instruments from Trading212",
@@ -319,9 +398,9 @@ pub struct GetPieByIdTool {
 pub struct UpdatePieTool {
     /// The unique ID of the pie to update
     pub pie_id: i32,
-    /// Updated instrument allocations (ticker -> weight percentage as decimal 0.0-1.0)
+    /// Updated instrument allocations
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instrument_shares: Option<std::collections::HashMap<String, f64>>,
+    pub instrument_shares: Option<Vec<InstrumentAllocation>>,
     /// Updated pie name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -483,7 +562,13 @@ impl UpdatePieTool {
         let mut request_body = serde_json::Map::new();
 
         if let Some(ref instrument_shares) = self.instrument_shares {
-            let value = serde_json::to_value(instrument_shares).map_err(|e| {
+            // Convert Vec<InstrumentAllocation> to HashMap<String, f64> for API compatibility
+            let shares_map: HashMap<String, f64> = instrument_shares
+                .iter()
+                .map(|allocation| (allocation.ticker.clone(), allocation.weight))
+                .collect();
+
+            let value = serde_json::to_value(shares_map).map_err(|e| {
                 CallToolError::new(Trading212Error::serialization_error(format!(
                     "Failed to serialize instrument_shares: {e}"
                 )))
@@ -524,7 +609,7 @@ impl UpdatePieTool {
 
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", config.api_key))
+            .header("Authorization", &config.api_key)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -554,7 +639,7 @@ impl UpdatePieTool {
             )));
         }
 
-        let pie: PieResult = serde_json::from_str(&response_text).map_err(|e| {
+        let pie: DetailedPieResponse = serde_json::from_str(&response_text).map_err(|e| {
             CallToolError::new(Trading212Error::parse_error(format!(
                 "Failed to parse JSON response: {e}. Response body: {response_text}"
             )))
@@ -565,7 +650,6 @@ impl UpdatePieTool {
     }
 }
 
-/// Enum containing all available Trading212 MCP tools
 tool_box! {
     Trading212Tools,
     [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool]
@@ -667,6 +751,51 @@ mod tests {
             url,
             "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=&type="
         );
+    }
+
+    #[test]
+    fn test_update_pie_response_parsing_failure() {
+        // This test uses a realistic API response format based on actual Trading212 structure
+        let realistic_api_response = r#"{"instruments":[{"ticker":"AAPL_US_EQ","result":{"priceAvgInvestedValue":100.00,"priceAvgValue":105.00,"priceAvgResult":5.00,"priceAvgResultCoef":0.05},"expectedShare":0.5,"currentShare":0.48,"ownedQuantity":1.0,"issues":[]},{"ticker":"GOOGL_US_EQ","result":{"priceAvgInvestedValue":200.00,"priceAvgValue":210.00,"priceAvgResult":10.00,"priceAvgResultCoef":0.05},"expectedShare":0.5,"currentShare":0.52,"ownedQuantity":0.5,"issues":[]}],"settings":{"id":12345,"instrumentShares":null,"name":"Test Portfolio","icon":"TestIcon","goal":1000.00,"creationDate":1640995200.0,"endDate":"2025-12-31T23:59:59.999+00:00","initialInvestment":300.00,"dividendCashAction":"REINVEST","publicUrl":null}}"#;
+
+        // Attempt to parse as PieResult (current code) - this should fail
+        let result: Result<PieResult, _> = serde_json::from_str(realistic_api_response);
+        assert!(
+            result.is_err(),
+            "Parsing as PieResult should fail for realistic API response"
+        );
+
+        // The error should mention missing field 'priceAvgInvestedValue'
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("priceAvgInvestedValue"));
+
+        // But parsing as DetailedPieResponse should succeed
+        let detailed_result: Result<DetailedPieResponse, _> =
+            serde_json::from_str(realistic_api_response);
+        assert!(
+            detailed_result.is_ok(),
+            "Parsing as DetailedPieResponse should succeed"
+        );
+
+        let pie_response = detailed_result.unwrap();
+        assert_eq!(pie_response.settings.id, 12345);
+        assert_eq!(pie_response.settings.name, "Test Portfolio");
+        assert_eq!(pie_response.instruments.len(), 2);
+
+        // Verify the instrument structure
+        let instrument = &pie_response.instruments[0];
+        assert_eq!(instrument.ticker, "AAPL_US_EQ");
+        assert_eq!(instrument.expected_share, 0.5);
+        assert_eq!(instrument.owned_quantity, 1.0);
+
+        // Verify issues structure (empty array)
+        assert!(instrument.issues.is_array());
+        assert_eq!(instrument.issues.as_array().unwrap().len(), 0);
+
+        // Verify settings structure
+        assert_eq!(pie_response.settings.dividend_cash_action, "REINVEST");
+        assert_eq!(pie_response.settings.goal, 1000.0);
+        assert_eq!(pie_response.settings.creation_date, 1_640_995_200.0);
     }
 
     mod http_tests {

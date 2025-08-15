@@ -361,9 +361,16 @@ async fn test_update_pie_tool_execution() {
         .await;
 
     // Test the update pie tool directly
-    let mut instrument_shares = std::collections::HashMap::new();
-    instrument_shares.insert("AAPL_US_EQ".to_string(), 0.60);
-    instrument_shares.insert("GOOGL_US_EQ".to_string(), 0.40);
+    let instrument_shares = vec![
+        trading212_mcp_server::tools::InstrumentAllocation {
+            ticker: "AAPL_US_EQ".to_string(),
+            weight: 0.60,
+        },
+        trading212_mcp_server::tools::InstrumentAllocation {
+            ticker: "GOOGL_US_EQ".to_string(),
+            weight: 0.40,
+        },
+    ];
 
     let _tool = trading212_mcp_server::tools::UpdatePieTool {
         pie_id: 12345,

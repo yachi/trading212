@@ -209,14 +209,11 @@ Add the following to your Claude Desktop MCP configuration:
 
 ### Code Quality
 
-This project uses comprehensive linting with Clippy:
+This project uses comprehensive quality checks:
 
 ```bash
-# Format code
-cargo fmt
-
-# Run lints
-cargo clippy
+# Run all quality checks (format, lint, audit, dependency check)
+cargo make quality
 
 # Run tests
 cargo test
@@ -285,9 +282,8 @@ MIT License
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Ensure all lints pass: `cargo clippy`
-5. Format code: `cargo fmt`
-6. Submit a pull request
+4. Run quality checks: `cargo make quality`
+5. Submit a pull request
 
 ## Troubleshooting
 

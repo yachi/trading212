@@ -311,17 +311,14 @@ mod tests {
             // Test handler creation in the context of server startup
             // This tests the same path the main function would take
 
-            match Trading212Handler::new() {
-                Ok(handler) => {
-                    // Verify handler is properly configured
-                    assert!(!handler.config.api_key.is_empty());
-                    assert!(!handler.config.base_url.is_empty());
-                    assert!(handler.config.base_url.starts_with("http"));
-                }
-                Err(_) => {
-                    // Handler creation can fail if API key file doesn't exist
-                    // This is expected in test environments without setup
-                }
+            if let Ok(handler) = Trading212Handler::new() {
+                // Verify handler is properly configured
+                assert!(!handler.config.api_key.is_empty());
+                assert!(!handler.config.base_url.is_empty());
+                assert!(handler.config.base_url.starts_with("http"));
+            } else {
+                // Handler creation can fail if API key file doesn't exist
+                // This is expected in test environments without setup
             }
         }
 
@@ -354,7 +351,7 @@ mod tests {
                 EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
 
             // Verify the filter was created successfully
-            assert!(!format!("{:?}", env_filter).is_empty());
+            assert!(!format!("{env_filter:?}").is_empty());
         }
 
         #[test]
@@ -432,7 +429,7 @@ mod tests {
             let filter = EnvFilter::from_default_env().add_directive(Level::INFO.into());
 
             // Verify filter creation succeeds
-            let filter_debug = format!("{:?}", filter);
+            let filter_debug = format!("{filter:?}");
             assert!(!filter_debug.is_empty());
             assert!(filter_debug.contains("INFO") || filter_debug.contains("info"));
         }
@@ -467,7 +464,7 @@ mod tests {
         // Should be in a recognizable format
         assert!(
             details.protocol_version.contains('-')
-                || details.protocol_version.chars().any(|c| c.is_numeric())
+                || details.protocol_version.chars().any(char::is_numeric)
         );
     }
 
@@ -483,7 +480,10 @@ mod tests {
 
         // Verify tools capability is configured
         assert!(capabilities.tools.is_some());
-        let tools = capabilities.tools.as_ref().unwrap();
+        let tools = capabilities
+            .tools
+            .as_ref()
+            .expect("tools capability should be configured");
         assert!(tools.list_changed.is_none());
     }
 
@@ -498,7 +498,10 @@ mod tests {
         assert_eq!(info.title, Some("Trading212 MCP Server".to_string()));
 
         // Test field consistency
-        assert_eq!(&info.name, info.title.as_ref().unwrap());
+        assert_eq!(
+            &info.name,
+            info.title.as_ref().expect("title should be set")
+        );
     }
 
     #[tokio::test]
@@ -595,7 +598,7 @@ mod tests {
 
         for level in levels {
             let filter = EnvFilter::from_default_env().add_directive(level.into());
-            let filter_debug = format!("{:?}", filter);
+            let filter_debug = format!("{filter:?}");
             assert!(!filter_debug.is_empty());
         }
     }
@@ -607,7 +610,7 @@ mod tests {
         assert!(!version.is_empty());
 
         // Should contain version-like format
-        assert!(version.contains('-') || version.chars().any(|c| c.is_numeric()));
+        assert!(version.contains('-') || version.chars().any(char::is_numeric));
 
         // Should be reasonable length
         assert!(version.len() >= 3);
