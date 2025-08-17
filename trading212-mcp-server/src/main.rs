@@ -4,6 +4,8 @@
 //! This server enables AI assistants to retrieve information about tradeable instruments
 //! from Trading212's platform through the MCP protocol specification.
 
+#![allow(unused_crate_dependencies)]
+
 mod config;
 mod errors;
 mod handler;
