@@ -1625,5 +1625,43 @@ mod tests {
             let empty_args: HashMap<String, Value> = HashMap::new();
             assert!(empty_args.is_empty());
         }
+
+        #[test]
+        fn test_tools_conversion_from_call_tool_request_params() {
+            use rust_mcp_sdk::schema::CallToolRequestParams;
+            use serde_json::json;
+
+            // Test tool parameter conversion
+            let test_cases = vec![
+                (
+                    "get_instruments",
+                    json!({
+                        "search": "AAPL",
+                        "type": "STOCK"
+                    }),
+                ),
+                ("get_pies", json!({})),
+                (
+                    "get_pie_by_id",
+                    json!({
+                        "pie_id": 12345
+                    }),
+                ),
+            ];
+
+            for (tool_name, arguments) in test_cases {
+                let params = CallToolRequestParams {
+                    name: tool_name.to_string(),
+                    arguments: Some(arguments.as_object().unwrap().clone()),
+                };
+
+                let result = Trading212Tools::try_from(params);
+                assert!(
+                    result.is_ok(),
+                    "Tool conversion should succeed for: {}",
+                    tool_name
+                );
+            }
+        }
     }
 }

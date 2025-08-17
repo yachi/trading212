@@ -399,4 +399,22 @@ mod tests {
         assert_eq!(api_key, api_key_content);
         assert_eq!(api_key.len(), 1000);
     }
+
+    #[test]
+    fn test_config_integration_with_custom_base_url() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let api_key_path = temp_dir.path().join(".trading212-api-key");
+        fs::write(&api_key_path, "test_api_key_12345").expect("Failed to write API key");
+
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+        mock_env.set("TRADING212_BASE_URL", "https://demo.trading212.com/api/v0");
+
+        let config = Trading212Config::with_env_provider(&mock_env);
+        assert!(config.is_ok());
+
+        let config = config.unwrap();
+        assert_eq!(config.api_key, "test_api_key_12345");
+        assert_eq!(config.base_url, "https://demo.trading212.com/api/v0");
+    }
 }

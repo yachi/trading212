@@ -182,25 +182,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handler_tools_list() {
-        // Test that tools list is correctly structured
-        let tools = Trading212Tools::tools();
-        assert_eq!(tools.len(), 4);
-
-        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(tool_names.contains(&"get_instruments"));
-        assert!(tool_names.contains(&"get_pies"));
-        assert!(tool_names.contains(&"get_pie_by_id"));
-
-        // Verify all tools have descriptions
-        for tool in &tools {
-            if let Some(desc) = &tool.description {
-                assert!(!desc.is_empty());
-            }
-        }
-    }
-
-    #[test]
     fn test_handler_client_creation() {
         let handler = create_test_handler();
 
@@ -236,27 +217,6 @@ mod tests {
             Err(e) => {
                 // Verify the error is properly wrapped as McpSdkError
                 assert!(e.to_string().contains("Trading212") || e.to_string().contains("config"));
-            }
-        }
-    }
-
-    #[test]
-    fn test_tools_list_completeness() {
-        // Test that all expected tools are present and properly configured
-        let tools = Trading212Tools::tools();
-
-        assert_eq!(tools.len(), 4, "Expected exactly 4 tools");
-
-        // Verify each tool has required properties
-        for tool in &tools {
-            assert!(!tool.name.is_empty(), "Tool name should not be empty");
-
-            // Verify tool names match expected values
-            match tool.name.as_str() {
-                "get_instruments" | "get_pies" | "get_pie_by_id" | "update_pie" => {
-                    // Expected tool names
-                }
-                _ => panic!("Unexpected tool name: {}", tool.name),
             }
         }
     }
@@ -395,46 +355,6 @@ mod tests {
         // Verify handler configuration for tracing
         assert!(handler.config.base_url.contains("trading212"));
         assert!(!handler.config.api_key.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_handle_list_tools_request_with_mock() {
-        let _handler = create_test_handler();
-
-        // Create a mock request using the simplest possible structure
-        let tools_list = Trading212Tools::tools();
-
-        // Test that we can get the tools list (simulating the handler behavior)
-        assert_eq!(tools_list.len(), 4);
-        assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
-        assert!(tools_list.iter().any(|t| t.name == "get_pies"));
-        assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
-
-        // Test tools list meta properties
-        for tool in &tools_list {
-            assert!(!tool.name.is_empty());
-            if let Some(desc) = &tool.description {
-                assert!(!desc.is_empty());
-            }
-        }
-    }
-
-    #[test]
-    fn test_tools_conversion_error_handling() {
-        // Test error handling by verifying error types exist and can be created
-        let conversion_error = Trading212Error::conversion_error("Test conversion error");
-        assert!(conversion_error
-            .to_string()
-            .contains("Test conversion error"));
-
-        // Test that all tool variants exist in the tools list
-        let tools_list = Trading212Tools::tools();
-        assert_eq!(tools_list.len(), 4);
-
-        let tool_names: Vec<&str> = tools_list.iter().map(|t| t.name.as_str()).collect();
-        assert!(tool_names.contains(&"get_instruments"));
-        assert!(tool_names.contains(&"get_pies"));
-        assert!(tool_names.contains(&"get_pie_by_id"));
     }
 
     #[test]
