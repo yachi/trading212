@@ -20,7 +20,6 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-
 /// Test helper to create an MCP server process
 struct McpServerProcess {
     _child: Child,
