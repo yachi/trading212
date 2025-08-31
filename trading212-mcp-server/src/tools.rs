@@ -357,6 +357,14 @@ pub struct GetInstrumentsTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "type")]
     pub instrument_type: Option<String>,
+
+    /// Maximum number of instruments to return (default: 100, max: 1000)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+
+    /// Number of instruments to skip for pagination (default: 0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
 }
 
 #[mcp_tool(
@@ -429,7 +437,7 @@ impl GetInstrumentsTool {
     /// Execute the `get_instruments` tool.
     ///
     /// Retrieves a list of tradeable instruments from Trading212 API,
-    /// optionally filtered by search term and instrument type.
+    /// optionally filtered by search term and instrument type, with client-side pagination.
     ///
     /// # Arguments
     ///
@@ -448,6 +456,8 @@ impl GetInstrumentsTool {
         tracing::debug!(
             search = ?self.search,
             instrument_type = ?self.instrument_type,
+            limit = ?self.limit,
+            offset = ?self.offset,
             "Executing get_instruments tool"
         );
 
@@ -455,18 +465,45 @@ impl GetInstrumentsTool {
             build_instruments_url(config, self.search.as_ref(), self.instrument_type.as_ref());
 
         match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await {
-            Ok(instruments) => {
+            Ok(all_instruments) => {
+                let total_count = all_instruments.len();
                 tracing::info!(
-                    count = instruments.len(),
-                    "Successfully retrieved instruments"
+                    total_count = total_count,
+                    "Successfully retrieved all instruments from API"
                 );
-                create_json_response(&instruments, "instruments", instruments.len())
+
+                // Apply client-side pagination
+                let paginated_instruments = self.apply_pagination(all_instruments);
+                let returned_count = paginated_instruments.len();
+
+                tracing::info!(
+                    returned_count = returned_count,
+                    "Applied client-side pagination"
+                );
+
+                create_json_response(&paginated_instruments, "instruments", returned_count)
             }
             Err(e) => {
                 tracing::error!(error = %e, "Tool execution failed");
                 Err(CallToolError::new(e))
             }
         }
+    }
+
+    /// Apply client-side pagination to the instruments list.
+    ///
+    /// Uses the limit and offset parameters to slice the full instruments list.
+    fn apply_pagination(&self, instruments: Vec<Instrument>) -> Vec<Instrument> {
+        let offset = self.offset.unwrap_or(0) as usize;
+        let limit = self.limit.unwrap_or(100).min(1000) as usize; // Default 100, max 1000
+
+        // Skip instruments based on offset
+        if offset >= instruments.len() {
+            return Vec::new();
+        }
+
+        // Take only the requested number of instruments
+        instruments.into_iter().skip(offset).take(limit).collect()
     }
 }
 
@@ -899,6 +936,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -940,6 +979,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: Some("AAPL".to_string()),
                 instrument_type: Some("STOCK".to_string()),
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -968,6 +1009,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -999,6 +1042,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -1027,6 +1072,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -1053,6 +1100,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -1174,6 +1223,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
 
             let result = tool.call_tool(&client, &config).await;
@@ -1518,6 +1569,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: Some("AAPL".to_string()),
                 instrument_type: Some("STOCK".to_string()),
+                limit: Some(50),
+                offset: Some(10),
             };
 
             // Test that the tool can be serialized
@@ -1532,6 +1585,8 @@ mod tests {
             let deserialized_tool = deserialized.unwrap();
             assert_eq!(deserialized_tool.search, tool.search);
             assert_eq!(deserialized_tool.instrument_type, tool.instrument_type);
+            assert_eq!(deserialized_tool.limit, tool.limit);
+            assert_eq!(deserialized_tool.offset, tool.offset);
         }
 
         #[test]
@@ -1571,6 +1626,8 @@ mod tests {
                 Trading212Tools::GetInstrumentsTool(GetInstrumentsTool {
                     search: Some("TEST".to_string()),
                     instrument_type: None,
+                    limit: None,
+                    offset: None,
                 }),
                 Trading212Tools::GetPiesTool(GetPiesTool {}),
                 Trading212Tools::GetPieByIdTool(GetPieByIdTool { pie_id: 999 }),
@@ -1604,6 +1661,8 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: Some("".to_string()),
                 instrument_type: None,
+                limit: None,
+                offset: None,
             };
             assert_eq!(tool.search, Some("".to_string()));
         }
@@ -1613,9 +1672,111 @@ mod tests {
             let tool = GetInstrumentsTool {
                 search: Some("A&B C.D-E_F".to_string()),
                 instrument_type: Some("ETF".to_string()),
+                limit: None,
+                offset: None,
             };
             assert!(tool.search.as_ref().unwrap().contains("&"));
             assert!(tool.search.is_some());
+        }
+
+        #[test]
+        fn test_apply_pagination_default_params() {
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: None,
+                offset: None,
+            };
+
+            let instruments = create_test_instruments(150);
+            let result = tool.apply_pagination(instruments);
+
+            // Should return default limit of 100 items starting from offset 0
+            assert_eq!(result.len(), 100);
+            assert_eq!(result[0].ticker, "INSTRUMENT_0");
+            assert_eq!(result[99].ticker, "INSTRUMENT_99");
+        }
+
+        #[test]
+        fn test_apply_pagination_with_limit() {
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(50),
+                offset: None,
+            };
+
+            let instruments = create_test_instruments(150);
+            let result = tool.apply_pagination(instruments);
+
+            assert_eq!(result.len(), 50);
+            assert_eq!(result[0].ticker, "INSTRUMENT_0");
+            assert_eq!(result[49].ticker, "INSTRUMENT_49");
+        }
+
+        #[test]
+        fn test_apply_pagination_with_offset() {
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(25),
+                offset: Some(10),
+            };
+
+            let instruments = create_test_instruments(50);
+            let result = tool.apply_pagination(instruments);
+
+            assert_eq!(result.len(), 25);
+            assert_eq!(result[0].ticker, "INSTRUMENT_10");
+            assert_eq!(result[24].ticker, "INSTRUMENT_34");
+        }
+
+        #[test]
+        fn test_apply_pagination_offset_beyond_length() {
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(10),
+                offset: Some(50),
+            };
+
+            let instruments = create_test_instruments(30);
+            let result = tool.apply_pagination(instruments);
+
+            // Should return empty vec when offset is beyond length
+            assert_eq!(result.len(), 0);
+        }
+
+        #[test]
+        fn test_apply_pagination_max_limit_enforcement() {
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(2000), // Exceeds max of 1000
+                offset: None,
+            };
+
+            let instruments = create_test_instruments(1500);
+            let result = tool.apply_pagination(instruments);
+
+            // Should enforce max limit of 1000
+            assert_eq!(result.len(), 1000);
+        }
+
+        fn create_test_instruments(count: usize) -> Vec<Instrument> {
+            (0..count)
+                .map(|i| Instrument {
+                    ticker: format!("INSTRUMENT_{}", i),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 1,
+                    isin: format!("US{:08}005", i),
+                    currency_code: "USD".to_string(),
+                    name: format!("Test Instrument {}", i),
+                    short_name: format!("Test{}", i),
+                    max_open_quantity: 1000.0,
+                    added_on: "2020-01-01".to_string(),
+                })
+                .collect()
         }
 
         #[test]

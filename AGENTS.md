@@ -2,6 +2,10 @@
 
 Before working with Trading212 API, read `trading212-api.md` first.
 
+## Core Principles
+
+**Reduce Cognitive Load**: Write simple, readable code that's easy to understand and maintain.
+
 ## Code Quality Requirements
 
 After completing any code-changing tasks:
