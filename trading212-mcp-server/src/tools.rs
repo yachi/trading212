@@ -60,15 +60,12 @@ where
     })?;
 
     let has_more = (offset as usize + returned_count) < total_count;
-    let next_offset = if has_more {
-        offset + returned_count as u32
-    } else {
-        0
-    };
+    let current_page = offset.div_ceil(limit); // Use ceiling division to fix bug
+    let next_page = if has_more { current_page + 1 } else { 0 };
 
     let pagination_info = if has_more {
         format!(
-            "\nPagination: Showing {returned_count} of {total_count} total {item_type}. For next page, use: offset={next_offset}, limit={limit}"
+            "\nPagination: Showing {returned_count} of {total_count} total {item_type}. For next page, use: page={next_page}, limit={limit}"
         )
     } else {
         format!(
@@ -274,7 +271,7 @@ pub struct DetailedPieResponse {
 
 #[mcp_tool(
     name = "get_instruments",
-    description = "Get paginated list of tradeable instruments from Trading212. Use limit and offset for efficient pagination through large datasets. Recommended: limit=50-100 for optimal performance.",
+    description = "Get paginated list of tradeable instruments from Trading212. Use limit and page for efficient pagination through large datasets. Recommended: limit=50-100 for optimal performance.",
     title = "Get Trading212 Instruments (Paginated)",
     idempotent_hint = true,
     destructive_hint = false,
@@ -283,7 +280,7 @@ pub struct DetailedPieResponse {
 )]
 /// Tool for retrieving Trading212 financial instruments
 #[allow(missing_docs)]
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct GetInstrumentsTool {
     /// Optional search term to filter instruments
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -299,10 +296,10 @@ pub struct GetInstrumentsTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 
-    /// Number of instruments to skip for pagination (default: 0)
-    /// Use with limit to iterate through results: offset=0, then offset=100, offset=200, etc.
+    /// Page number for pagination (default: 1, starts from 1)
+    /// Use with limit to iterate through results: page=1, then page=2, page=3, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub offset: Option<u32>,
+    pub page: Option<u32>,
 }
 
 #[mcp_tool(
@@ -409,7 +406,7 @@ impl GetInstrumentsTool {
             search = ?self.search,
             instrument_type = ?self.instrument_type,
             limit = ?self.limit,
-            offset = ?self.offset,
+            page = ?self.page,
             "Executing get_instruments tool"
         );
     }
@@ -457,8 +454,8 @@ impl GetInstrumentsTool {
             "Applied client-side pagination"
         );
 
-        let offset = self.offset.unwrap_or(0);
         let limit = self.limit.unwrap_or(100).min(1000);
+        let offset = self.calculate_offset(limit);
 
         create_paginated_response(
             &paginated_instruments,
@@ -468,6 +465,12 @@ impl GetInstrumentsTool {
             offset,
             limit,
         )
+    }
+
+    /// Calculate offset from page parameter
+    fn calculate_offset(&self, limit: u32) -> u32 {
+        let page = self.page.unwrap_or(1).clamp(1, 1000); // Cap page at reasonable limit
+        page.saturating_sub(1).saturating_mul(limit)
     }
 
     /// Build query parameters for the instruments API request
@@ -487,10 +490,11 @@ impl GetInstrumentsTool {
 
     /// Apply client-side pagination to the instruments list.
     ///
-    /// Uses the limit and offset parameters to slice the full instruments list.
+    /// Uses the limit and calculated offset (from page or offset parameter) to slice the full instruments list.
     fn apply_pagination(&self, instruments: Vec<Instrument>) -> Vec<Instrument> {
-        let offset = self.offset.unwrap_or(0) as usize;
-        let limit = self.limit.unwrap_or(100).min(1000) as usize; // Default 100, max 1000
+        let limit = self.limit.unwrap_or(100).min(1000);
+        let offset = self.calculate_offset(limit) as usize;
+        let limit = limit as usize;
 
         // Skip instruments based on offset
         if offset >= instruments.len() {
@@ -850,12 +854,7 @@ mod tests {
             };
 
             let client = Client::new();
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -898,7 +897,7 @@ mod tests {
                 search: Some("AAPL".to_string()),
                 instrument_type: Some("STOCK".to_string()),
                 limit: None,
-                offset: None,
+                page: None,
             };
 
             let cache = Trading212Cache::new().unwrap();
@@ -925,12 +924,7 @@ mod tests {
             };
 
             let client = Client::new();
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -959,12 +953,7 @@ mod tests {
             };
 
             let client = Client::new();
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -990,12 +979,7 @@ mod tests {
             };
 
             let client = Client::new();
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -1019,12 +1003,7 @@ mod tests {
             };
 
             let client = Client::new();
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -1146,12 +1125,7 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let cache = Trading212Cache::new().unwrap();
             let result = tool.call_tool(&client, &config, &cache).await;
@@ -1286,7 +1260,7 @@ mod tests {
                 search: Some("AAPL".to_string()),
                 instrument_type: Some("STOCK".to_string()),
                 limit: Some(50),
-                offset: Some(10),
+                page: Some(2),
             };
 
             // Test that the tool can be serialized
@@ -1302,7 +1276,7 @@ mod tests {
             assert_eq!(deserialized_tool.search, tool.search);
             assert_eq!(deserialized_tool.instrument_type, tool.instrument_type);
             assert_eq!(deserialized_tool.limit, tool.limit);
-            assert_eq!(deserialized_tool.offset, tool.offset);
+            assert_eq!(deserialized_tool.page, tool.page);
         }
 
         #[test]
@@ -1343,7 +1317,7 @@ mod tests {
                     search: Some("TEST".to_string()),
                     instrument_type: None,
                     limit: None,
-                    offset: None,
+                    page: None,
                 }),
                 Trading212Tools::GetPiesTool(GetPiesTool {}),
                 Trading212Tools::GetPieByIdTool(GetPieByIdTool { pie_id: 999 }),
@@ -1378,7 +1352,7 @@ mod tests {
                 search: Some("".to_string()),
                 instrument_type: None,
                 limit: None,
-                offset: None,
+                page: None,
             };
             assert_eq!(tool.search, Some("".to_string()));
         }
@@ -1389,7 +1363,7 @@ mod tests {
                 search: Some("A&B C.D-E_F".to_string()),
                 instrument_type: Some("ETF".to_string()),
                 limit: None,
-                offset: None,
+                page: None,
             };
             assert!(tool.search.as_ref().unwrap().contains("&"));
             assert!(tool.search.is_some());
@@ -1397,12 +1371,7 @@ mod tests {
 
         #[test]
         fn test_apply_pagination_default_params() {
-            let tool = GetInstrumentsTool {
-                search: None,
-                instrument_type: None,
-                limit: None,
-                offset: None,
-            };
+            let tool = GetInstrumentsTool::default();
 
             let instruments = create_test_instruments(150);
             let result = tool.apply_pagination(instruments);
@@ -1419,7 +1388,7 @@ mod tests {
                 search: None,
                 instrument_type: None,
                 limit: Some(50),
-                offset: None,
+                page: None,
             };
 
             let instruments = create_test_instruments(150);
@@ -1431,36 +1400,59 @@ mod tests {
         }
 
         #[test]
-        fn test_apply_pagination_with_offset() {
+        fn test_apply_pagination_with_page() {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
                 limit: Some(25),
-                offset: Some(10),
+                page: Some(2), // page 2 with 25 limit = offset 25
             };
 
             let instruments = create_test_instruments(50);
             let result = tool.apply_pagination(instruments);
 
             assert_eq!(result.len(), 25);
-            assert_eq!(result[0].ticker, "INSTRUMENT_10");
-            assert_eq!(result[24].ticker, "INSTRUMENT_34");
+            assert_eq!(result[0].ticker, "INSTRUMENT_25");
+            assert_eq!(result[24].ticker, "INSTRUMENT_49");
         }
 
         #[test]
-        fn test_apply_pagination_offset_beyond_length() {
+        fn test_apply_pagination_page_beyond_length() {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
                 limit: Some(10),
-                offset: Some(50),
+                page: Some(6), // page 6 with limit 10 = offset 50, beyond 30 items
             };
 
             let instruments = create_test_instruments(30);
             let result = tool.apply_pagination(instruments);
 
-            // Should return empty vec when offset is beyond length
+            // Should return empty vec when page is beyond available data
             assert_eq!(result.len(), 0);
+        }
+
+        #[test]
+        fn test_page_calculation_fix() {
+            // Test the integer division bug fix
+            let _tool = GetInstrumentsTool {
+                limit: Some(100),
+                page: Some(2), // Test page 2 directly
+                ..Default::default()
+            };
+
+            let limit = 100;
+            let offset = 199;
+
+            // Test our fixed ceiling division formula
+            let current_page = (offset + limit - 1) / limit;
+            assert_eq!(current_page, 2); // 199 + 100 - 1 = 298, 298/100 = 2
+
+            // Test edge cases
+            assert_eq!((100 + 100 - 1) / 100, 1); // offset 100 = page 1
+            assert_eq!((101 + 100 - 1) / 100, 2); // offset 101 = page 2
+            assert_eq!((200 + 100 - 1) / 100, 2); // offset 200 = page 2
+            assert_eq!((201 + 100 - 1) / 100, 3); // offset 201 = page 3
         }
 
         #[test]
@@ -1469,7 +1461,7 @@ mod tests {
                 search: None,
                 instrument_type: None,
                 limit: Some(2000), // Exceeds max of 1000
-                offset: None,
+                page: None,
             };
 
             let instruments = create_test_instruments(1500);

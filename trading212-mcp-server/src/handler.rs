@@ -401,7 +401,7 @@ mod tests {
             search: Some("AAPL".to_string()),
             instrument_type: Some("STOCK".to_string()),
             limit: None,
-            offset: None,
+            page: None,
         };
         assert_eq!(instruments_tool.search, Some("AAPL".to_string()));
         assert_eq!(instruments_tool.instrument_type, Some("STOCK".to_string()));
@@ -421,12 +421,7 @@ mod tests {
         // Test that we can create all Trading212Tools variants
         use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool, UpdatePieTool};
 
-        let instruments_tool = GetInstrumentsTool {
-            search: None,
-            instrument_type: None,
-            limit: None,
-            offset: None,
-        };
+        let instruments_tool = GetInstrumentsTool::default();
         let pies_tool = GetPiesTool {};
         let pie_by_id_tool = GetPieByIdTool { pie_id: 42 };
         let update_pie_tool = UpdatePieTool {
@@ -538,7 +533,7 @@ mod tests {
             search: Some("AAPL".to_string()),
             instrument_type: Some("STOCK".to_string()),
             limit: None,
-            offset: None,
+            page: None,
         };
 
         let pies_tool = GetPiesTool {};
@@ -669,7 +664,7 @@ mod tests {
             search: Some("TEST".to_string()),
             instrument_type: None,
             limit: None,
-            offset: None,
+            page: None,
         });
 
         let pies_tool = Trading212Tools::GetPiesTool(GetPiesTool {});
@@ -815,7 +810,7 @@ mod tests {
             search: Some("TEST".to_string()),
             instrument_type: None,
             limit: None,
-            offset: None,
+            page: None,
         };
 
         // This will fail because we don't have a real API, but tests the async call pattern
@@ -869,7 +864,7 @@ mod tests {
             search: Some("FAIL_TEST".to_string()),
             instrument_type: None,
             limit: None,
-            offset: None,
+            page: None,
         };
 
         // This will fail and trigger error logging

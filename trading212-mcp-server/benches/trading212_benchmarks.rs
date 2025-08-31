@@ -13,10 +13,12 @@ use std::hint::black_box;
 use std::time::Duration;
 
 // Simple structs to simulate tool creation without importing the full crate
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct GetInstrumentsTool {
     search: Option<String>,
     instrument_type: Option<String>,
+    limit: Option<u32>,
+    page: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +52,7 @@ fn benchmark_tools_creation(c: &mut Criterion) {
             black_box(GetInstrumentsTool {
                 search: Some("AAPL".to_string()),
                 instrument_type: Some("STOCK".to_string()),
+                ..Default::default()
             })
         })
     });

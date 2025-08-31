@@ -63,11 +63,17 @@ The server communicates via stdio using the MCP protocol.
 
 #### `get_instruments`
 
-Retrieves a list of all tradeable instruments from Trading212.
+Retrieves a paginated list of all tradeable instruments from Trading212.
 
 **Parameters:**
 - `search` (optional): Search term to filter instruments
 - `type` (optional): Instrument type filter (e.g., "STOCK", "ETF")
+- `limit` (optional): Maximum number of instruments to return (default: 100, max: 1000)
+- `page` (optional): Page number for pagination (default: 1, starts from 1)
+
+**Pagination:**
+- Use `page` and `limit` for intuitive pagination: `page=1, page=2, page=3, etc.`
+- Responses include pagination info showing next page details
 
 **Example MCP Request:**
 ```json
@@ -79,10 +85,19 @@ Retrieves a list of all tradeable instruments from Trading212.
     "name": "get_instruments",
     "arguments": {
       "search": "AAPL",
-      "type": "STOCK"
+      "type": "STOCK",
+      "limit": 50,
+      "page": 1
     }
   }
 }
+```
+
+**Example Pagination Response:**
+```
+Found 50 instruments:
+Pagination: Showing 50 of 15481 total instruments. For next page, use: page=2, limit=50
+Performance Tip: Large dataset detected. Consider using smaller page sizes for better performance.
 ```
 
 #### `get_pies`
