@@ -11,7 +11,10 @@ use rust_mcp_sdk::schema::{
 };
 use rust_mcp_sdk::{error::McpSdkError, mcp_server::ServerHandler, McpServer};
 
-use crate::{config::Trading212Config, errors::Trading212Error, tools::Trading212Tools};
+use crate::{
+    cache::Trading212Cache, config::Trading212Config, errors::Trading212Error,
+    tools::Trading212Tools,
+};
 
 /// Handler for Trading212 MCP protocol messages.
 ///
@@ -22,16 +25,18 @@ pub struct Trading212Handler {
     pub client: Client,
     /// Configuration for the Trading212 server
     pub config: Trading212Config,
+    /// Cache and rate limiter for API requests
+    pub cache: Trading212Cache,
 }
 
 impl Trading212Handler {
     /// Create a new `Trading212Handler` instance.
     ///
-    /// Loads configuration and initializes the HTTP client.
+    /// Loads configuration, initializes the HTTP client, and sets up caching.
     ///
     /// # Errors
     ///
-    /// Returns an error if configuration loading or HTTP client creation fails.
+    /// Returns an error if configuration loading, HTTP client creation, or cache setup fails.
     pub fn new() -> Result<Self, McpSdkError> {
         let config = Trading212Config::new().map_err(|e| {
             McpSdkError::from(std::io::Error::new(
@@ -51,12 +56,23 @@ impl Trading212Handler {
                 )))
             })?;
 
+        let cache = Trading212Cache::new().map_err(|e| {
+            McpSdkError::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to create cache: {e}"),
+            ))
+        })?;
+
         tracing::info!(
             base_url = %config.base_url,
-            "Initialized Trading212Handler"
+            "Initialized Trading212Handler with caching and rate limiting"
         );
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            cache,
+        })
     }
 }
 
@@ -110,19 +126,23 @@ impl ServerHandler for Trading212Handler {
         let result = match tool_params {
             Trading212Tools::GetInstrumentsTool(get_instruments_tool) => {
                 get_instruments_tool
-                    .call_tool(&self.client, &self.config)
+                    .call_tool(&self.client, &self.config, &self.cache)
                     .await
             }
             Trading212Tools::GetPiesTool(get_pies_tool) => {
-                get_pies_tool.call_tool(&self.client, &self.config).await
+                get_pies_tool
+                    .call_tool(&self.client, &self.config, &self.cache)
+                    .await
             }
             Trading212Tools::GetPieByIdTool(get_pie_by_id_tool) => {
                 get_pie_by_id_tool
-                    .call_tool(&self.client, &self.config)
+                    .call_tool(&self.client, &self.config, &self.cache)
                     .await
             }
             Trading212Tools::UpdatePieTool(update_pie_tool) => {
-                update_pie_tool.call_tool(&self.client, &self.config).await
+                update_pie_tool
+                    .call_tool(&self.client, &self.config, &self.cache)
+                    .await
             }
         };
 
@@ -152,7 +172,8 @@ mod tests {
             .build()
             .expect("Failed to create test HTTP client");
 
-        Trading212Handler { client, config }
+        let cache = Trading212Cache::new().expect("Failed to create test cache");
+        Trading212Handler { client, config, cache }
     }
 
     #[test]
@@ -786,19 +807,19 @@ mod tests {
 
         // This will fail because we don't have a real API, but tests the async call pattern
         let result = instruments_tool
-            .call_tool(&handler.client, &handler.config)
+            .call_tool(&handler.client, &handler.config, &handler.cache)
             .await;
         assert!(result.is_err());
 
         // Test GetPiesTool pattern
         let pies_tool = GetPiesTool {};
-        let result = pies_tool.call_tool(&handler.client, &handler.config).await;
+        let result = pies_tool.call_tool(&handler.client, &handler.config, &handler.cache).await;
         assert!(result.is_err());
 
         // Test GetPieByIdTool pattern
         let pie_by_id_tool = GetPieByIdTool { pie_id: 123 };
         let result = pie_by_id_tool
-            .call_tool(&handler.client, &handler.config)
+            .call_tool(&handler.client, &handler.config, &handler.cache)
             .await;
         assert!(result.is_err());
 
@@ -813,7 +834,7 @@ mod tests {
             instrument_shares: None,
         };
         let result = update_pie_tool
-            .call_tool(&handler.client, &handler.config)
+            .call_tool(&handler.client, &handler.config, &handler.cache)
             .await;
         assert!(result.is_err());
 
@@ -837,7 +858,7 @@ mod tests {
         };
 
         // This will fail and trigger error logging
-        let result = tool.call_tool(&handler.client, &handler.config).await;
+        let result = tool.call_tool(&handler.client, &handler.config, &handler.cache).await;
 
         // Verify error handling
         assert!(result.is_err());

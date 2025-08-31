@@ -14,45 +14,7 @@ use rust_mcp_sdk::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{config::Trading212Config, errors::Trading212Error};
-
-/// Build URL with query parameters for instrument search.
-fn build_instruments_url(
-    config: &Trading212Config,
-    search: Option<&String>,
-    instrument_type: Option<&String>,
-) -> String {
-    let base_url = config.endpoint_url("equity/metadata/instruments");
-
-    // Optimize for the common cases without Vec allocation
-    match (search, instrument_type) {
-        (None, None) => base_url,
-        (Some(search), None) => {
-            let mut url = String::with_capacity(base_url.len() + search.len() + 8);
-            url.push_str(&base_url);
-            url.push_str("?search=");
-            url.push_str(&urlencoding::encode(search));
-            url
-        }
-        (None, Some(instrument_type)) => {
-            let mut url = String::with_capacity(base_url.len() + instrument_type.len() + 6);
-            url.push_str(&base_url);
-            url.push_str("?type=");
-            url.push_str(&urlencoding::encode(instrument_type));
-            url
-        }
-        (Some(search), Some(instrument_type)) => {
-            let mut url =
-                String::with_capacity(base_url.len() + search.len() + instrument_type.len() + 15);
-            url.push_str(&base_url);
-            url.push_str("?search=");
-            url.push_str(&urlencoding::encode(search));
-            url.push_str("&type=");
-            url.push_str(&urlencoding::encode(instrument_type));
-            url
-        }
-    }
-}
+use crate::{cache::Trading212Cache, config::Trading212Config, errors::Trading212Error};
 
 /// Helper function to serialize data and create a formatted MCP text response.
 ///
@@ -97,82 +59,6 @@ where
     Ok(CallToolResult::text_content(vec![TextContent::from(
         format!("{item_name}:\n{json_result}"),
     )]))
-}
-
-/// Process a successful HTTP response and parse JSON.
-async fn process_response<T>(response: reqwest::Response) -> Result<T, Trading212Error>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let response_text = response.text().await.map_err(|e| {
-        Trading212Error::request_failed(format!("Failed to read response body: {e}"))
-    })?;
-
-    tracing::debug!(
-        response_body = %response_text,
-        response_length = response_text.len(),
-        "Raw API response received"
-    );
-
-    serde_json::from_str::<T>(&response_text).map_err(|e| {
-        tracing::error!(
-            response_body = %response_text,
-            parse_error = %e,
-            "Failed to parse JSON response"
-        );
-        Trading212Error::parse_error(format!(
-            "Failed to parse JSON response: {e}. Response body: {response_text}"
-        ))
-    })
-}
-
-/// Handle an error HTTP response.
-async fn handle_error_response(response: reqwest::Response) -> Trading212Error {
-    let status = response.status();
-    let error_text = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "Unknown error".to_string());
-
-    tracing::error!(
-        status_code = status.as_u16(),
-        response_body = %error_text,
-        "API returned non-success status"
-    );
-
-    Trading212Error::api_error(status.as_u16(), error_text)
-}
-
-/// Make a single HTTP request to the Trading212 API.
-///
-/// This is a shared function used by all tools to avoid code duplication.
-async fn make_api_request<T>(
-    client: &Client,
-    api_key: &str,
-    url: &str,
-) -> Result<T, Trading212Error>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let response = client
-        .get(url)
-        .header("Authorization", api_key)
-        .send()
-        .await
-        .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
-
-    let status = response.status();
-    tracing::debug!(
-        status_code = status.as_u16(),
-        url = url,
-        "Received API response"
-    );
-
-    if status == reqwest::StatusCode::OK {
-        process_response(response).await
-    } else {
-        Err(handle_error_response(response).await)
-    }
 }
 
 /// Represents a tradeable instrument from Trading212.
@@ -443,6 +329,7 @@ impl GetInstrumentsTool {
     ///
     /// * `client` - HTTP client for making API requests
     /// * `config` - Trading212 configuration containing API credentials
+    /// * `cache` - Cache and rate limiter for API requests
     ///
     /// # Errors
     ///
@@ -452,6 +339,7 @@ impl GetInstrumentsTool {
         &self,
         client: &Client,
         config: &Trading212Config,
+        cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         tracing::debug!(
             search = ?self.search,
@@ -461,10 +349,18 @@ impl GetInstrumentsTool {
             "Executing get_instruments tool"
         );
 
-        let url =
-            build_instruments_url(config, self.search.as_ref(), self.instrument_type.as_ref());
+        // Build query parameters
+        let params = self.build_query_params();
+        let params_str = if params.is_empty() {
+            None
+        } else {
+            Some(params.as_str())
+        };
 
-        match make_api_request::<Vec<Instrument>>(client, &config.api_key, &url).await {
+        match cache
+            .request::<Vec<Instrument>>(client, config, "equity/metadata/instruments", params_str)
+            .await
+        {
             Ok(all_instruments) => {
                 let total_count = all_instruments.len();
                 tracing::info!(
@@ -488,6 +384,21 @@ impl GetInstrumentsTool {
                 Err(CallToolError::new(e))
             }
         }
+    }
+
+    /// Build query parameters for the instruments API request
+    fn build_query_params(&self) -> String {
+        let mut params = Vec::new();
+
+        if let Some(ref search) = self.search {
+            params.push(format!("search={}", urlencoding::encode(search)));
+        }
+
+        if let Some(ref instrument_type) = self.instrument_type {
+            params.push(format!("type={}", urlencoding::encode(instrument_type)));
+        }
+
+        params.join("&")
     }
 
     /// Apply client-side pagination to the instruments list.
@@ -516,6 +427,7 @@ impl GetPiesTool {
     ///
     /// * `client` - HTTP client for making API requests
     /// * `config` - Trading212 configuration containing API credentials
+    /// * `cache` - Cache and rate limiter for API requests
     ///
     /// # Errors
     ///
@@ -525,12 +437,14 @@ impl GetPiesTool {
         &self,
         client: &Client,
         config: &Trading212Config,
+        cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         tracing::debug!("Executing get_pies tool");
 
-        let url = config.endpoint_url("equity/pies");
-
-        match make_api_request::<Vec<Pie>>(client, &config.api_key, &url).await {
+        match cache
+            .request::<Vec<Pie>>(client, config, "equity/pies", None)
+            .await
+        {
             Ok(pies) => {
                 tracing::info!(count = pies.len(), "Successfully retrieved pies");
                 create_json_response(&pies, "investment pies", pies.len())
@@ -552,6 +466,7 @@ impl GetPieByIdTool {
     ///
     /// * `client` - HTTP client for making API requests
     /// * `config` - Trading212 configuration containing API credentials
+    /// * `cache` - Cache and rate limiter for API requests
     ///
     /// # Errors
     ///
@@ -561,12 +476,16 @@ impl GetPieByIdTool {
         &self,
         client: &Client,
         config: &Trading212Config,
+        cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         tracing::debug!(pie_id = self.pie_id, "Executing get_pie_by_id tool");
 
-        let url = config.endpoint_url(&format!("equity/pies/{}", self.pie_id));
+        let endpoint = format!("equity/pies/{}", self.pie_id);
 
-        match make_api_request::<serde_json::Value>(client, &config.api_key, &url).await {
+        match cache
+            .request::<serde_json::Value>(client, config, &endpoint, None)
+            .await
+        {
             Ok(pie_detail) => {
                 tracing::info!(pie_id = self.pie_id, "Successfully retrieved pie details");
                 create_single_item_response(&pie_detail, &format!("Pie {} details", self.pie_id))
@@ -588,6 +507,7 @@ impl UpdatePieTool {
     ///
     /// * `client` - HTTP client for making API requests
     /// * `config` - Trading212 configuration containing API credentials
+    /// * `cache` - Cache and rate limiter for API requests (used for rate limiting only)
     ///
     /// # Errors
     ///
@@ -597,6 +517,7 @@ impl UpdatePieTool {
         &self,
         client: &Client,
         config: &Trading212Config,
+        _cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         tracing::debug!(pie_id = self.pie_id, "Executing update_pie tool");
 

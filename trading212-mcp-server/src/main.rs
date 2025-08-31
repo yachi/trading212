@@ -6,6 +6,7 @@
 
 #![allow(unused_crate_dependencies)]
 
+mod cache;
 mod config;
 mod errors;
 mod handler;

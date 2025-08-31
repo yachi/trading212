@@ -24,10 +24,19 @@ Different endpoints require specific scopes:
 
 ## Rate Limiting
 
-Most endpoints have rate limits to prevent abuse:
-- Standard: 1-6 requests per specified interval
-- Order execution: 1 request per 2 seconds
-- Some metadata endpoints: 1 request per 30 seconds
+Trading212 enforces strict rate limits per endpoint:
+
+| Endpoint | Rate Limit | Notes |
+|----------|------------|-------|
+| `/equity/metadata/instruments` | **1 request per 50 seconds** | Strictest limit - use pagination |
+| `/account` | 1 request per 30 seconds | Account information |
+| `/account/cash` | 1 request per 2 seconds | Cash balance |
+| `/equity/pies` | 1 request per 30 seconds | Investment pies list |
+| `/equity/pies/{pieId}` | 1 request per 5 seconds | Pie details |
+| `/equity/orders` | 1 request per 5 seconds | Orders |
+| `/equity/portfolio` | 1 request per 5 seconds | Portfolio data |
+
+**Important:** The MCP server includes **automatic rate limiting** for all endpoints. It will automatically wait between requests to respect Trading212's limits, preventing 429 errors completely.
 
 ## Endpoints
 

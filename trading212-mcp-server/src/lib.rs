@@ -9,11 +9,13 @@ use tracing_subscriber as _;
 #[cfg(test)]
 use criterion as _;
 
+pub mod cache;
 pub mod config;
 pub mod errors;
 pub mod handler;
 pub mod tools;
 
+pub use cache::Trading212Cache;
 pub use config::Trading212Config;
 pub use errors::Trading212Error;
 pub use handler::Trading212Handler;
