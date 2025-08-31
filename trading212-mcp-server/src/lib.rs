@@ -9,6 +9,10 @@ use tracing_subscriber as _;
 #[cfg(test)]
 use criterion as _;
 
+// Include cargo-husky for git hooks (dev dependency)
+#[cfg(test)]
+use cargo_husky as _;
+
 pub mod cache;
 pub mod config;
 pub mod errors;

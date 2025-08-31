@@ -156,6 +156,15 @@ impl ServerHandler for Trading212Handler {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::items_after_statements)]
+#[allow(clippy::assertions_on_constants)]
+#[allow(clippy::needless_collect)]
+#[allow(clippy::doc_markdown)]
+#[allow(clippy::single_match_else)]
+#[allow(clippy::match_same_arms)]
 mod tests {
     use super::*;
     use crate::tools::Trading212Tools;
@@ -173,7 +182,11 @@ mod tests {
             .expect("Failed to create test HTTP client");
 
         let cache = Trading212Cache::new().expect("Failed to create test cache");
-        Trading212Handler { client, config, cache }
+        Trading212Handler {
+            client,
+            config,
+            cache,
+        }
     }
 
     #[test]
@@ -813,7 +826,9 @@ mod tests {
 
         // Test GetPiesTool pattern
         let pies_tool = GetPiesTool {};
-        let result = pies_tool.call_tool(&handler.client, &handler.config, &handler.cache).await;
+        let result = pies_tool
+            .call_tool(&handler.client, &handler.config, &handler.cache)
+            .await;
         assert!(result.is_err());
 
         // Test GetPieByIdTool pattern
@@ -858,7 +873,9 @@ mod tests {
         };
 
         // This will fail and trigger error logging
-        let result = tool.call_tool(&handler.client, &handler.config, &handler.cache).await;
+        let result = tool
+            .call_tool(&handler.client, &handler.config, &handler.cache)
+            .await;
 
         // Verify error handling
         assert!(result.is_err());

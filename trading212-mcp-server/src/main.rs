@@ -34,7 +34,9 @@ async fn main() -> SdkResult<()> {
     let server_details = create_server_details();
 
     // STEP 2: create a stdio transport with default options
-    let transport = StdioTransport::new(TransportOptions::default())?;
+    let transport = StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+        TransportOptions::default(),
+    )?;
 
     // STEP 3: instantiate our custom handler for handling MCP messages
     let handler = Trading212Handler::new()?;
@@ -83,6 +85,8 @@ fn create_server_details() -> InitializeResult {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -127,7 +131,11 @@ mod tests {
     #[test]
     fn test_transport_creation() {
         // Test that transport creation works with default options
-        let result = std::panic::catch_unwind(|| StdioTransport::new(TransportOptions::default()));
+        let result = std::panic::catch_unwind(|| {
+            StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                TransportOptions::default(),
+            )
+        });
 
         // Should not panic during creation
         assert!(result.is_ok());
@@ -144,7 +152,10 @@ mod tests {
         assert!(server_details.capabilities.tools.is_some());
 
         // Test transport creation
-        let transport_result = StdioTransport::new(TransportOptions::default());
+        let transport_result =
+            StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                TransportOptions::default(),
+            );
         assert!(transport_result.is_ok());
 
         // Test that we can create the server components independently
@@ -200,7 +211,11 @@ mod tests {
     async fn test_main_components_error_handling() {
         // Test that invalid transport options are handled appropriately
         let transport_options = TransportOptions::default();
-        let result = std::panic::catch_unwind(|| StdioTransport::new(transport_options));
+        let result = std::panic::catch_unwind(|| {
+            StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                transport_options,
+            )
+        });
 
         // Should not panic
         assert!(result.is_ok());
@@ -254,7 +269,8 @@ mod tests {
             let options = TransportOptions::default();
 
             // Create transport with defaults
-            let transport_result = StdioTransport::new(options);
+            let transport_result =
+                StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(options);
             assert!(transport_result.is_ok());
         }
 
@@ -414,12 +430,20 @@ mod tests {
 
             // Test with default options
             let options1 = TransportOptions::default();
-            assert!(StdioTransport::new(options1).is_ok());
+            assert!(
+                StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(options1)
+                    .is_ok()
+            );
 
             // Test multiple creation attempts
             for _ in 0..3 {
                 let options = TransportOptions::default();
-                assert!(StdioTransport::new(options).is_ok());
+                assert!(
+                    StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                        options
+                    )
+                    .is_ok()
+                );
             }
         }
 
@@ -447,7 +471,10 @@ mod tests {
 
             // Test transport options
             let options = TransportOptions::default();
-            assert!(StdioTransport::new(options).is_ok());
+            assert!(
+                StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(options)
+                    .is_ok()
+            );
 
             // Test init_tracing doesn't panic
             let _result = std::panic::catch_unwind(|| {
@@ -523,7 +550,10 @@ mod tests {
 
         // Test transport creation
         let transport_options = TransportOptions::default();
-        let transport_result = StdioTransport::new(transport_options);
+        let transport_result =
+            StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                transport_options,
+            );
         assert!(transport_result.is_ok());
     }
 
@@ -554,7 +584,10 @@ mod tests {
         // Test server runtime creation components
 
         let server_details = create_server_details();
-        let transport_result = StdioTransport::new(TransportOptions::default());
+        let transport_result =
+            StdioTransport::<rust_mcp_sdk::schema::schema_utils::ClientMessage>::new(
+                TransportOptions::default(),
+            );
 
         assert!(transport_result.is_ok());
 

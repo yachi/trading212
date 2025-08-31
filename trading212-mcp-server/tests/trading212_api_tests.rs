@@ -1,3 +1,8 @@
+#![allow(unused_crate_dependencies)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::uninlined_format_args)]
+
 //! Trading212 API Integration Tests
 //!
 //! Tests tool execution with the Trading212 API using mocked responses.
@@ -61,7 +66,12 @@ async fn create_test_handler_with_mock_api() -> (Trading212Handler, MockServer) 
         .build()
         .expect("Failed to create HTTP client");
 
-    let handler = Trading212Handler { client, config };
+    let cache = trading212_mcp_server::Trading212Cache::new().expect("Failed to create cache");
+    let handler = Trading212Handler {
+        client,
+        config,
+        cache,
+    };
 
     // Keep temp_dir alive for the duration of the test
     std::mem::forget(temp_dir);
@@ -106,7 +116,9 @@ async fn test_get_instruments_tool_execution() {
 
     match result {
         Trading212Tools::GetInstrumentsTool(tool) => {
-            let tool_result = tool.call_tool(&handler.client, &handler.config).await;
+            let tool_result = tool
+                .call_tool(&handler.client, &handler.config, &handler.cache)
+                .await;
             assert!(tool_result.is_ok());
             let content = tool_result.unwrap();
             assert!(!content.content.is_empty());
@@ -154,7 +166,9 @@ async fn test_get_pies_tool_execution() {
 
     match result {
         Trading212Tools::GetPiesTool(tool) => {
-            let tool_result = tool.call_tool(&handler.client, &handler.config).await;
+            let tool_result = tool
+                .call_tool(&handler.client, &handler.config, &handler.cache)
+                .await;
             assert!(tool_result.is_ok());
             let content = tool_result.unwrap();
             assert!(!content.content.is_empty());
@@ -186,7 +200,9 @@ async fn test_api_error_handling() {
 
     match result {
         Trading212Tools::GetInstrumentsTool(tool) => {
-            let tool_result = tool.call_tool(&handler.client, &handler.config).await;
+            let tool_result = tool
+                .call_tool(&handler.client, &handler.config, &handler.cache)
+                .await;
             assert!(tool_result.is_err());
             let error = tool_result.unwrap_err();
             assert!(error.to_string().contains("API error") || error.to_string().contains("401"));
@@ -199,7 +215,7 @@ async fn test_api_error_handling() {
 async fn test_sequential_tool_requests() {
     let (handler, mock_server) = create_test_handler_with_mock_api().await;
 
-    // Mock response for sequential requests
+    // Mock response for sequential requests (only expect 1 due to caching)
     Mock::given(method("GET"))
         .and(path("/equity/metadata/instruments"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
@@ -215,11 +231,11 @@ async fn test_sequential_tool_requests() {
                 "addedOn": "2020-01-01"
             }
         ])))
-        .expect(3)
+        .expect(1) // Only first request hits the server, rest served from cache
         .mount(&mock_server)
         .await;
 
-    // Test multiple sequential calls to verify tool execution works reliably
+    // Test multiple sequential calls to verify tool execution works reliably with caching
     for i in 0..3 {
         let call_params = CallToolRequestParams {
             name: "get_instruments".to_string(),
@@ -231,7 +247,8 @@ async fn test_sequential_tool_requests() {
 
         let tool_result = match result {
             Trading212Tools::GetInstrumentsTool(tool) => {
-                tool.call_tool(&handler.client, &handler.config).await
+                tool.call_tool(&handler.client, &handler.config, &handler.cache)
+                    .await
             }
             _ => panic!("Expected GetInstrumentsTool"),
         };
@@ -269,7 +286,7 @@ async fn test_update_pie_tool_execution() {
                 "name": "Updated Tech Portfolio",
                 "icon": "tech",
                 "goal": 15000.0,
-                "creationDate": 1640995200.0,
+                "creationDate": 1_640_995_200.0,
                 "endDate": "2025-12-31T23:59:59.999+00:00",
                 "initialInvestment": 1000.0,
                 "dividendCashAction": "REINVEST",
@@ -301,7 +318,9 @@ async fn test_update_pie_tool_execution() {
 
     match result {
         Trading212Tools::UpdatePieTool(tool) => {
-            let tool_result = tool.call_tool(&handler.client, &handler.config).await;
+            let tool_result = tool
+                .call_tool(&handler.client, &handler.config, &handler.cache)
+                .await;
             assert!(tool_result.is_ok());
             let content = tool_result.unwrap();
             assert!(!content.content.is_empty());

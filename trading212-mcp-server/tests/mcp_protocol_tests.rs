@@ -1,3 +1,11 @@
+#![allow(unused_crate_dependencies)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::unused_async)]
+#![allow(clippy::use_self)]
+#![allow(clippy::future_not_send)]
+#![allow(clippy::doc_markdown)]
+
 //! MCP Protocol Compliance Tests
 //!
 //! Tests the complete MCP protocol flow: MCP Client → JSON-RPC → MCP Server → Mock Trading212 API
@@ -459,7 +467,7 @@ async fn test_real_mcp_call_update_pie() {
                 "name": "Updated Tech Portfolio",
                 "icon": "tech",
                 "goal": 15000.0,
-                "creationDate": 1640995200.0,
+                "creationDate": 1_640_995_200.0,
                 "endDate": "2025-12-31T23:59:59.999+00:00",
                 "initialInvestment": 1000.0,
                 "dividendCashAction": "REINVEST",

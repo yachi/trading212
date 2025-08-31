@@ -39,30 +39,27 @@ impl CacheKey {
 /// Rate limiter configuration for different Trading212 endpoints
 #[derive(Debug, Clone)]
 pub struct EndpointLimits {
-    /// Requests per period
-    pub requests: NonZeroU32,
     /// Time period for the rate limit
     pub period: Duration,
 }
 
 impl EndpointLimits {
     /// Create endpoint limits from requests per second
-    pub fn per_seconds(requests: u32, seconds: u64) -> Result<Self, Trading212Error> {
-        let requests = NonZeroU32::new(requests).ok_or_else(|| {
-            Trading212Error::config_error("Rate limit requests must be non-zero".to_string())
-        })?;
-
-        Ok(Self {
-            requests,
+    pub const fn per_seconds(_requests: u32, seconds: u64) -> Self {
+        Self {
             period: Duration::from_secs(seconds),
-        })
+        }
     }
 }
 
 /// Trading212 API cache and rate limiter
 pub struct Trading212Cache {
-    /// Response cache with TTL
-    cache: Cache<CacheKey, String>,
+    /// Per-endpoint caches with TTLs matching rate limits
+    instruments_cache: Cache<CacheKey, String>,
+    pies_cache: Cache<CacheKey, String>,
+    pie_detail_cache: Cache<CacheKey, String>,
+    account_cache: Cache<CacheKey, String>,
+    orders_cache: Cache<CacheKey, String>,
     /// Rate limiters for different endpoints  
     instruments_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
     pies_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
@@ -78,30 +75,54 @@ impl Trading212Cache {
     ///
     /// Returns an error if rate limiter configuration is invalid
     pub fn new() -> Result<Self, Trading212Error> {
-        // Cache with 1 hour TTL and max 1000 entries
-        let cache = Cache::builder()
-            .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
-            .max_capacity(1000)
-            .build();
-
         // Rate limiters based on Trading212 API documentation
-        let instruments_limits = EndpointLimits::per_seconds(1, 50)?; // 1 request per 50 seconds (strictest)
+        let instruments_limits = EndpointLimits::per_seconds(1, 50); // 1 request per 50 seconds (strictest)
         let instruments_limiter = Arc::new(Self::create_limiter(&instruments_limits)?);
 
-        let pies_limits = EndpointLimits::per_seconds(1, 30)?; // 1 request per 30 seconds
+        let pies_limits = EndpointLimits::per_seconds(1, 30); // 1 request per 30 seconds
         let pies_limiter = Arc::new(Self::create_limiter(&pies_limits)?);
 
-        let pie_detail_limits = EndpointLimits::per_seconds(1, 5)?; // 1 request per 5 seconds
+        let pie_detail_limits = EndpointLimits::per_seconds(1, 5); // 1 request per 5 seconds
         let pie_detail_limiter = Arc::new(Self::create_limiter(&pie_detail_limits)?);
 
-        let account_limits = EndpointLimits::per_seconds(1, 30)?; // 1 request per 30 seconds
+        let account_limits = EndpointLimits::per_seconds(1, 30); // 1 request per 30 seconds
         let account_limiter = Arc::new(Self::create_limiter(&account_limits)?);
 
-        let orders_limits = EndpointLimits::per_seconds(1, 5)?; // 1 request per 5 seconds
+        let orders_limits = EndpointLimits::per_seconds(1, 5); // 1 request per 5 seconds
         let orders_limiter = Arc::new(Self::create_limiter(&orders_limits)?);
 
+        // Create caches with TTLs matching rate limits (with some buffer)
+        let instruments_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(60)) // 60s TTL for 50s rate limit
+            .max_capacity(200)
+            .build();
+
+        let pies_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(40)) // 40s TTL for 30s rate limit
+            .max_capacity(200)
+            .build();
+
+        let pie_detail_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(15)) // 15s TTL for 5s rate limit
+            .max_capacity(200)
+            .build();
+
+        let account_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(40)) // 40s TTL for 30s rate limit
+            .max_capacity(200)
+            .build();
+
+        let orders_cache = Cache::builder()
+            .time_to_live(Duration::from_secs(15)) // 15s TTL for 5s rate limit
+            .max_capacity(200)
+            .build();
+
         Ok(Self {
-            cache,
+            instruments_cache,
+            pies_cache,
+            pie_detail_cache,
+            account_cache,
+            orders_cache,
             instruments_limiter,
             pies_limiter,
             pie_detail_limiter,
@@ -122,6 +143,26 @@ impl Trading212Cache {
         Ok(RateLimiter::direct(quota))
     }
 
+    /// Get the appropriate cache for an endpoint
+    fn get_cache(&self, endpoint: &str) -> &Cache<CacheKey, String> {
+        if endpoint.contains("metadata/instruments") {
+            &self.instruments_cache
+        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() >= 2
+        {
+            // Matches "/equity/pies/{id}" pattern
+            &self.pie_detail_cache
+        } else if endpoint.contains("pies") {
+            &self.pies_cache
+        } else if endpoint.contains("account") {
+            &self.account_cache
+        } else if endpoint.contains("orders") {
+            &self.orders_cache
+        } else {
+            // Default to instruments cache for unknown endpoints
+            &self.instruments_cache
+        }
+    }
+
     /// Get the appropriate rate limiter for an endpoint
     fn get_limiter(
         &self,
@@ -129,7 +170,8 @@ impl Trading212Cache {
     ) -> Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>> {
         if endpoint.contains("metadata/instruments") {
             self.instruments_limiter.clone()
-        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() > 2 {
+        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() >= 2
+        {
             // Matches "/equity/pies/{id}" pattern
             self.pie_detail_limiter.clone()
         } else if endpoint.contains("pies") {
@@ -163,6 +205,7 @@ impl Trading212Cache {
     ///
     /// Returns an error if the API request fails, rate limiting fails,
     /// or response parsing fails.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn request<T>(
         &self,
         client: &Client,
@@ -174,9 +217,10 @@ impl Trading212Cache {
         T: DeserializeOwned,
     {
         let cache_key = CacheKey::new(endpoint, params.unwrap_or(""));
+        let cache = self.get_cache(endpoint);
 
         // Check cache first
-        if let Some(cached_response) = self.cache.get(&cache_key).await {
+        if let Some(cached_response) = cache.get(&cache_key).await {
             tracing::debug!(endpoint = endpoint, "Using cached response");
 
             return serde_json::from_str(&cached_response).map_err(|e| {
@@ -199,7 +243,7 @@ impl Trading212Cache {
         // Build URL
         let url = params.map_or_else(
             || config.endpoint_url(endpoint),
-            |params| format!("{}?{}", config.endpoint_url(endpoint), params),
+            |params| format!("{}?{params}", config.endpoint_url(endpoint)),
         );
 
         // Make HTTP request
@@ -245,7 +289,7 @@ impl Trading212Cache {
         );
 
         // Cache the response for successful requests
-        self.cache.insert(cache_key, response_text.clone()).await;
+        cache.insert(cache_key, response_text.clone()).await;
 
         tracing::debug!(endpoint = endpoint, "Response cached successfully");
 
@@ -262,19 +306,6 @@ impl Trading212Cache {
             ))
         })
     }
-
-    /// Clear all cached responses
-    pub fn clear_cache(&self) {
-        self.cache.invalidate_all();
-        tracing::info!("Cache cleared");
-    }
-
-    /// Get cache statistics for monitoring
-    pub fn cache_stats(&self) -> (u64, u64) {
-        let entry_count = self.cache.entry_count();
-        let weighted_size = self.cache.weighted_size();
-        (entry_count, weighted_size)
-    }
 }
 
 impl Default for Trading212Cache {
@@ -284,6 +315,8 @@ impl Default for Trading212Cache {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -306,15 +339,8 @@ mod tests {
 
     #[test]
     fn test_endpoint_limits_creation() {
-        let limits = EndpointLimits::per_seconds(1, 50).unwrap();
-        assert_eq!(limits.requests.get(), 1);
+        let limits = EndpointLimits::per_seconds(1, 50);
         assert_eq!(limits.period, Duration::from_secs(50));
-    }
-
-    #[test]
-    fn test_endpoint_limits_zero_requests_error() {
-        let result = EndpointLimits::per_seconds(0, 50);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -324,38 +350,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cache_stats() {
-        let cache = Trading212Cache::new().unwrap();
-        let (entry_count, weighted_size) = cache.cache_stats();
+    async fn test_cache_basic_functionality() {
+        let cache = Trading212Cache::new().expect("Failed to create cache");
 
-        // New cache should be empty
-        assert_eq!(entry_count, 0);
-        assert_eq!(weighted_size, 0);
-    }
-
-    #[tokio::test]
-    async fn test_clear_cache() {
-        let cache = Trading212Cache::new().unwrap();
-
-        // Insert test data
-        let key = CacheKey::new("test", "params");
-        cache.cache.insert(key, "test_response".to_string()).await;
-
-        // Verify data exists
-        let (entry_count, _) = cache.cache_stats();
-        assert_eq!(entry_count, 1);
-
-        // Clear cache
-        cache.clear_cache();
-
-        // Verify cache is empty
-        let (entry_count, _) = cache.cache_stats();
-        assert_eq!(entry_count, 0);
+        // Test that cache was created successfully
+        assert!(cache.instruments_cache.entry_count() == 0);
     }
 
     #[test]
     fn test_get_limiter_endpoint_matching() {
-        let cache = Trading212Cache::new().unwrap();
+        let cache = Trading212Cache::new().expect("Failed to create cache");
 
         // Test instruments endpoint
         let limiter1 = cache.get_limiter("equity/metadata/instruments");
@@ -386,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_endpoint_pattern_matching() {
-        let cache = Trading212Cache::new().unwrap();
+        let cache = Trading212Cache::new().expect("Failed to create cache");
 
         // Test various pie detail patterns
         assert!(Arc::ptr_eq(
@@ -407,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_configuration() {
-        let cache = Trading212Cache::new().unwrap();
+        let cache = Trading212Cache::new().expect("Failed to create cache");
 
         // All limiters should be configured (this mainly tests that creation doesn't panic)
         assert!(cache.instruments_limiter.check().is_ok());
@@ -419,19 +423,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_insertion_and_retrieval() {
-        let cache = Trading212Cache::new().unwrap();
-        let key = CacheKey::new("test_endpoint", "param=value");
+        let cache = Trading212Cache::new().expect("Failed to create cache");
+        let key = CacheKey::new("equity/metadata/instruments", "param=value");
         let test_response = "test_json_response";
 
         // Insert into cache
         cache
-            .cache
+            .instruments_cache
             .insert(key.clone(), test_response.to_string())
             .await;
 
         // Retrieve from cache
-        let retrieved = cache.cache.get(&key).await;
+        let retrieved = cache.instruments_cache.get(&key).await;
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap(), test_response);
+        assert_eq!(
+            retrieved.expect("Cache should contain value"),
+            test_response
+        );
     }
 }

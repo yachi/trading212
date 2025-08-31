@@ -1,3 +1,12 @@
+#![allow(unused_crate_dependencies)]
+#![allow(dead_code)]
+#![allow(clippy::semicolon_if_nothing_returned)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(missing_docs)]
+
+//! Performance benchmarks for Trading212 MCP Server
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use serde_json::json;
 use std::hint::black_box;

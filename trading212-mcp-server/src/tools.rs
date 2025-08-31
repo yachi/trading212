@@ -341,6 +341,18 @@ impl GetInstrumentsTool {
         config: &Trading212Config,
         cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
+        self.log_execution_start();
+
+        let params = self.build_query_params();
+        let instruments = self
+            .fetch_instruments(client, config, cache, &params)
+            .await?;
+
+        self.process_instruments(instruments)
+    }
+
+    /// Log the start of tool execution
+    fn log_execution_start(&self) {
         tracing::debug!(
             search = ?self.search,
             instrument_type = ?self.instrument_type,
@@ -348,42 +360,52 @@ impl GetInstrumentsTool {
             offset = ?self.offset,
             "Executing get_instruments tool"
         );
+    }
 
-        // Build query parameters
-        let params = self.build_query_params();
+    /// Fetch instruments from API via cache
+    async fn fetch_instruments(
+        &self,
+        client: &Client,
+        config: &Trading212Config,
+        cache: &Trading212Cache,
+        params: &str,
+    ) -> Result<Vec<Instrument>, CallToolError> {
         let params_str = if params.is_empty() {
             None
         } else {
-            Some(params.as_str())
+            Some(params)
         };
 
-        match cache
+        cache
             .request::<Vec<Instrument>>(client, config, "equity/metadata/instruments", params_str)
             .await
-        {
-            Ok(all_instruments) => {
-                let total_count = all_instruments.len();
-                tracing::info!(
-                    total_count = total_count,
-                    "Successfully retrieved all instruments from API"
-                );
-
-                // Apply client-side pagination
-                let paginated_instruments = self.apply_pagination(all_instruments);
-                let returned_count = paginated_instruments.len();
-
-                tracing::info!(
-                    returned_count = returned_count,
-                    "Applied client-side pagination"
-                );
-
-                create_json_response(&paginated_instruments, "instruments", returned_count)
-            }
-            Err(e) => {
+            .map_err(|e| {
                 tracing::error!(error = %e, "Tool execution failed");
-                Err(CallToolError::new(e))
-            }
-        }
+                CallToolError::new(e)
+            })
+    }
+
+    /// Process instruments and create response
+    fn process_instruments(
+        &self,
+        all_instruments: Vec<Instrument>,
+    ) -> Result<CallToolResult, CallToolError> {
+        let total_count = all_instruments.len();
+        tracing::info!(
+            total_count = total_count,
+            "Successfully retrieved all instruments from API"
+        );
+
+        // Apply client-side pagination
+        let paginated_instruments = self.apply_pagination(all_instruments);
+        let returned_count = paginated_instruments.len();
+
+        tracing::info!(
+            returned_count = returned_count,
+            "Applied client-side pagination"
+        );
+
+        create_json_response(&paginated_instruments, "instruments", returned_count)
     }
 
     /// Build query parameters for the instruments API request
@@ -665,102 +687,14 @@ tool_box! {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::manual_string_new)]
+#[allow(clippy::single_char_pattern)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_build_instruments_url_no_params() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-
-        let url = build_instruments_url(&config, None, None);
-
-        assert_eq!(
-            url,
-            "https://demo.trading212.com/api/v0/equity/metadata/instruments"
-        );
-    }
-
-    #[test]
-    fn test_build_instruments_url_with_search() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-        let search = Some("AAPL".to_string());
-
-        let url = build_instruments_url(&config, search.as_ref(), None);
-
-        assert_eq!(
-            url,
-            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=AAPL"
-        );
-    }
-
-    #[test]
-    fn test_build_instruments_url_with_type() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-        let instrument_type = Some("STOCK".to_string());
-
-        let url = build_instruments_url(&config, None, instrument_type.as_ref());
-
-        assert_eq!(
-            url,
-            "https://demo.trading212.com/api/v0/equity/metadata/instruments?type=STOCK"
-        );
-    }
-
-    #[test]
-    fn test_build_instruments_url_with_both_params() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-        let search = Some("Tesla".to_string());
-        let instrument_type = Some("STOCK".to_string());
-
-        let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
-
-        assert_eq!(url, "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=Tesla&type=STOCK");
-    }
-
-    #[test]
-    fn test_build_instruments_url_with_special_characters() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-        let search = Some("S&P 500".to_string());
-
-        let url = build_instruments_url(&config, search.as_ref(), None);
-
-        assert_eq!(
-            url,
-            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=S%26P%20500"
-        );
-    }
-
-    #[test]
-    fn test_build_instruments_url_empty_strings() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-        let search = Some("".to_string());
-        let instrument_type = Some("".to_string());
-
-        let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
-
-        assert_eq!(
-            url,
-            "https://demo.trading212.com/api/v0/equity/metadata/instruments?search=&type="
-        );
-    }
 
     #[test]
     fn test_update_pie_response_parsing_failure() {
@@ -861,7 +795,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_ok());
             let response = result.unwrap();
@@ -904,7 +839,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_ok());
         }
@@ -934,7 +870,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
             let error = result.unwrap_err();
@@ -967,7 +904,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
         }
@@ -997,7 +935,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
         }
@@ -1025,7 +964,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
         }
@@ -1065,7 +1005,8 @@ mod tests {
             let client = Client::new();
             let tool = GetPiesTool {};
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_ok());
         }
@@ -1099,7 +1040,8 @@ mod tests {
             let client = Client::new();
             let tool = GetPieByIdTool { pie_id: 123 };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_ok());
         }
@@ -1124,7 +1066,8 @@ mod tests {
             let client = Client::new();
             let tool = GetPieByIdTool { pie_id: 999 };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
         }
@@ -1148,7 +1091,8 @@ mod tests {
                 offset: None,
             };
 
-            let result = tool.call_tool(&client, &config).await;
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
         }
@@ -1210,76 +1154,6 @@ mod tests {
             assert_eq!(response.content.len(), 1);
         }
 
-        #[tokio::test]
-        async fn test_process_response_success() {
-            use wiremock::matchers::method;
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let mock_server = MockServer::start().await;
-            let test_data = TestData {
-                name: "ProcessTest".to_string(),
-                value: 456,
-            };
-
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&test_data))
-                .mount(&mock_server)
-                .await;
-
-            let client = reqwest::Client::new();
-            let response = client.get(&mock_server.uri()).send().await.unwrap();
-
-            let result: Result<TestData, Trading212Error> = process_response(response).await;
-
-            assert!(result.is_ok());
-            let parsed_data = result.unwrap();
-            assert_eq!(parsed_data, test_data);
-        }
-
-        #[tokio::test]
-        async fn test_process_response_invalid_json() {
-            use wiremock::matchers::method;
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(200).set_body_string("invalid json {"))
-                .mount(&mock_server)
-                .await;
-
-            let client = reqwest::Client::new();
-            let response = client.get(&mock_server.uri()).send().await.unwrap();
-
-            let result: Result<TestData, Trading212Error> = process_response(response).await;
-
-            assert!(result.is_err());
-            let error = result.unwrap_err();
-            assert!(error.to_string().contains("Failed to parse JSON response"));
-        }
-
-        #[tokio::test]
-        async fn test_process_response_empty_body() {
-            use wiremock::matchers::method;
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(""))
-                .mount(&mock_server)
-                .await;
-
-            let client = reqwest::Client::new();
-            let response = client.get(&mock_server.uri()).send().await.unwrap();
-
-            let result: Result<TestData, Trading212Error> = process_response(response).await;
-
-            assert!(result.is_err());
-            let error = result.unwrap_err();
-            assert!(error.to_string().contains("Failed to parse JSON response"));
-        }
-
         #[test]
         fn test_serialization_error_handling() {
             // Test that serialization works for valid data types
@@ -1309,93 +1183,6 @@ mod tests {
         }
     }
 
-    mod url_building_tests {
-        use super::*;
-
-        #[test]
-        fn test_build_instruments_url_unicode_handling() {
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: "https://test.trading212.com/api/v0".to_string(),
-            };
-
-            let search = Some("ΑΥΤΟ".to_string()); // Greek letters
-            let url = build_instruments_url(&config, search.as_ref(), None);
-
-            assert!(url.contains("search="));
-            assert!(url.contains("%CE%91%CE%A5%CE%A4%CE%9F")); // URL encoded Greek
-        }
-
-        #[test]
-        fn test_build_instruments_url_long_parameters() {
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: "https://test.trading212.com/api/v0".to_string(),
-            };
-
-            let long_search = "a".repeat(1000);
-            let search = Some(long_search);
-            let url = build_instruments_url(&config, search.as_ref(), None);
-
-            assert!(url.contains("search="));
-            assert!(url.len() > config.base_url.len() + 100);
-        }
-
-        #[test]
-        fn test_build_instruments_url_parameter_ordering() {
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: "https://test.trading212.com/api/v0".to_string(),
-            };
-
-            let search = Some("TEST".to_string());
-            let instrument_type = Some("STOCK".to_string());
-            let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
-
-            // Should contain both parameters joined with &
-            assert!(url.contains("search=TEST"));
-            assert!(url.contains("type=STOCK"));
-            assert!(url.contains("&"));
-
-            // Check that parameters are properly separated
-            let query_part = url.split('?').nth(1).unwrap();
-            let params: Vec<&str> = query_part.split('&').collect();
-            assert_eq!(params.len(), 2);
-        }
-
-        #[test]
-        fn test_build_instruments_url_edge_cases() {
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: "https://test.trading212.com/api/v0".to_string(),
-            };
-
-            // Test with empty strings
-            let search = Some("".to_string());
-            let instrument_type = Some("".to_string());
-            let url = build_instruments_url(&config, search.as_ref(), instrument_type.as_ref());
-
-            assert!(url.contains("search="));
-            assert!(url.contains("type="));
-            assert!(url.contains("&"));
-        }
-
-        #[test]
-        fn test_build_instruments_url_special_characters() {
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: "https://test.trading212.com/api/v0".to_string(),
-            };
-
-            // Test with special characters that need encoding
-            let search = Some("A&B+C=D%E".to_string());
-            let url = build_instruments_url(&config, search.as_ref(), None);
-
-            // Should properly encode all special characters
-            assert!(url.contains("search=A%26B%2BC%3DD%25E"));
-        }
-    }
-
     mod error_path_tests {
         use super::*;
         use serde::{Deserialize, Serialize};
@@ -1403,36 +1190,6 @@ mod tests {
         #[derive(Debug, Serialize, Deserialize)]
         struct TestResponse {
             data: String,
-        }
-
-        #[tokio::test]
-        async fn test_process_response_with_different_content_types() {
-            use wiremock::matchers::method;
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let mock_server = MockServer::start().await;
-
-            let test_data = TestResponse {
-                data: "test_content".to_string(),
-            };
-
-            Mock::given(method("GET"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(&test_data)
-                        .insert_header("content-type", "application/json; charset=utf-8"),
-                )
-                .mount(&mock_server)
-                .await;
-
-            let client = reqwest::Client::new();
-            let response = client.get(&mock_server.uri()).send().await.unwrap();
-
-            let result: Result<TestResponse, Trading212Error> = process_response(response).await;
-
-            assert!(result.is_ok());
-            let parsed = result.unwrap();
-            assert_eq!(parsed.data, "test_content");
         }
 
         #[test]
@@ -1455,30 +1212,6 @@ mod tests {
             assert!(result.is_ok());
             let response = result.unwrap();
             assert_eq!(response.content.len(), 1);
-        }
-
-        #[tokio::test]
-        async fn test_process_response_with_bom() {
-            use wiremock::matchers::method;
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let mock_server = MockServer::start().await;
-
-            // JSON with BOM (Byte Order Mark)
-            let json_with_bom = "\u{FEFF}{\"data\":\"test\"}";
-
-            Mock::given(method("GET"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(json_with_bom))
-                .mount(&mock_server)
-                .await;
-
-            let client = reqwest::Client::new();
-            let response = client.get(&mock_server.uri()).send().await.unwrap();
-
-            let result: Result<TestResponse, Trading212Error> = process_response(response).await;
-
-            // Should handle BOM gracefully (serde_json strips it automatically)
-            assert!(result.is_ok());
         }
     }
 

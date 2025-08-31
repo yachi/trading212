@@ -101,6 +101,9 @@ impl Trading212Config {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::uninlined_format_args)]
 mod tests {
     use super::*;
     use std::{collections::HashMap, fs};
@@ -127,7 +130,7 @@ mod tests {
         fn var(&self, key: &str) -> Result<String, std::env::VarError> {
             self.vars
                 .get(key)
-                .map(|v| v.clone())
+                .cloned()
                 .ok_or(std::env::VarError::NotPresent)
         }
     }
