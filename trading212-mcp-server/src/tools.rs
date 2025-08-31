@@ -39,6 +39,56 @@ where
     )]))
 }
 
+/// Helper function to create a paginated response with metadata and hints.
+#[allow(clippy::cast_possible_truncation)]
+fn create_paginated_response<T>(
+    data: &T,
+    item_type: &str,
+    returned_count: usize,
+    total_count: usize,
+    offset: u32,
+    limit: u32,
+) -> Result<CallToolResult, CallToolError>
+where
+    T: serde::Serialize,
+{
+    let json_result = serde_json::to_string_pretty(data).map_err(|e| {
+        let error =
+            Trading212Error::serialization_error(format!("Failed to serialize {item_type}: {e}"));
+        tracing::error!(error = %error, "Serialization failed");
+        CallToolError::new(error)
+    })?;
+
+    let has_more = (offset as usize + returned_count) < total_count;
+    let next_offset = if has_more {
+        offset + returned_count as u32
+    } else {
+        0
+    };
+
+    let pagination_info = if has_more {
+        format!(
+            "\nPagination: Showing {returned_count} of {total_count} total {item_type}. For next page, use: offset={next_offset}, limit={limit}"
+        )
+    } else {
+        format!(
+            "\nPagination: Showing final {returned_count} of {total_count} total {item_type}. No more pages."
+        )
+    };
+
+    let performance_hint = if total_count > 1000 {
+        "\nPerformance Tip: Large dataset detected. Consider using smaller page sizes for better performance."
+    } else {
+        ""
+    };
+
+    Ok(CallToolResult::text_content(vec![TextContent::from(
+        format!(
+            "Found {returned_count} {item_type}:{pagination_info}{performance_hint}\n{json_result}"
+        ),
+    )]))
+}
+
 /// Helper function to create a single item JSON response.
 ///
 /// Used for responses that return a single item rather than a collection.
@@ -224,8 +274,8 @@ pub struct DetailedPieResponse {
 
 #[mcp_tool(
     name = "get_instruments",
-    description = "Get list of all tradeable instruments from Trading212",
-    title = "Get Trading212 Instruments",
+    description = "Get paginated list of tradeable instruments from Trading212. Use limit and offset for efficient pagination through large datasets. Recommended: limit=50-100 for optimal performance.",
+    title = "Get Trading212 Instruments (Paginated)",
     idempotent_hint = true,
     destructive_hint = false,
     open_world_hint = false,
@@ -245,10 +295,12 @@ pub struct GetInstrumentsTool {
     pub instrument_type: Option<String>,
 
     /// Maximum number of instruments to return (default: 100, max: 1000)
+    /// RECOMMENDED: Use 50-100 for optimal performance. Large limits may cause timeouts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 
     /// Number of instruments to skip for pagination (default: 0)
+    /// Use with limit to iterate through results: offset=0, then offset=100, offset=200, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
 }
@@ -405,7 +457,17 @@ impl GetInstrumentsTool {
             "Applied client-side pagination"
         );
 
-        create_json_response(&paginated_instruments, "instruments", returned_count)
+        let offset = self.offset.unwrap_or(0);
+        let limit = self.limit.unwrap_or(100).min(1000);
+
+        create_paginated_response(
+            &paginated_instruments,
+            "instruments",
+            returned_count,
+            total_count,
+            offset,
+            limit,
+        )
     }
 
     /// Build query parameters for the instruments API request
