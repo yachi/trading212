@@ -39,14 +39,13 @@ where
     )]))
 }
 
-/// Helper function to create a paginated response with metadata and hints.
-#[allow(clippy::cast_possible_truncation)]
+/// Helper function to create a paginated response
 fn create_paginated_response<T>(
     data: &T,
     item_type: &str,
     returned_count: usize,
     total_count: usize,
-    offset: u32,
+    page: u32,
     limit: u32,
 ) -> Result<CallToolResult, CallToolError>
 where
@@ -59,30 +58,20 @@ where
         CallToolError::new(error)
     })?;
 
-    let has_more = (offset as usize + returned_count) < total_count;
-    let current_page = offset.div_ceil(limit); // Use ceiling division to fix bug
-    let next_page = if has_more { current_page + 1 } else { 0 };
-
-    let pagination_info = if has_more {
-        format!(
-            "\nPagination: Showing {returned_count} of {total_count} total {item_type}. For next page, use: page={next_page}, limit={limit}"
-        )
+    let has_more =
+        returned_count == limit as usize && (page as usize * limit as usize) < total_count;
+    let next_hint = if has_more {
+        format!(" - Try page={}", page + 1)
     } else {
-        format!(
-            "\nPagination: Showing final {returned_count} of {total_count} total {item_type}. No more pages."
-        )
+        " - Final page".to_string()
     };
 
-    let performance_hint = if total_count > 1000 {
-        "\nPerformance Tip: Large dataset detected. Consider using smaller page sizes for better performance."
-    } else {
-        ""
-    };
+    let pagination_info = format!(
+        "\nShowing {returned_count} of {total_count} total {item_type} (page {page}){next_hint}"
+    );
 
     Ok(CallToolResult::text_content(vec![TextContent::from(
-        format!(
-            "Found {returned_count} {item_type}:{pagination_info}{performance_hint}\n{json_result}"
-        ),
+        format!("Found {returned_count} {item_type}:{pagination_info}\n{json_result}"),
     )]))
 }
 
@@ -291,8 +280,8 @@ pub struct GetInstrumentsTool {
     #[serde(rename = "type")]
     pub instrument_type: Option<String>,
 
-    /// Maximum number of instruments to return (default: 100, max: 1000)
-    /// RECOMMENDED: Use 50-100 for optimal performance. Large limits may cause timeouts.
+    /// Maximum number of instruments to return (default: 100)
+    /// RECOMMENDED: Use 50-100 for optimal performance. Very large limits may cause timeouts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 
@@ -454,23 +443,17 @@ impl GetInstrumentsTool {
             "Applied client-side pagination"
         );
 
-        let limit = self.limit.unwrap_or(100).min(1000);
-        let offset = self.calculate_offset(limit);
+        let page = self.page.unwrap_or(1).max(1);
+        let limit = self.limit.unwrap_or(100);
 
         create_paginated_response(
             &paginated_instruments,
             "instruments",
             returned_count,
             total_count,
-            offset,
+            page,
             limit,
         )
-    }
-
-    /// Calculate offset from page parameter
-    fn calculate_offset(&self, limit: u32) -> u32 {
-        let page = self.page.unwrap_or(1).clamp(1, 1000); // Cap page at reasonable limit
-        page.saturating_sub(1).saturating_mul(limit)
     }
 
     /// Build query parameters for the instruments API request
@@ -488,20 +471,12 @@ impl GetInstrumentsTool {
         params.join("&")
     }
 
-    /// Apply client-side pagination to the instruments list.
-    ///
-    /// Uses the limit and calculated offset (from page or offset parameter) to slice the full instruments list.
+    /// Apply pagination to instruments list
     fn apply_pagination(&self, instruments: Vec<Instrument>) -> Vec<Instrument> {
-        let limit = self.limit.unwrap_or(100).min(1000);
-        let offset = self.calculate_offset(limit) as usize;
-        let limit = limit as usize;
+        let limit = self.limit.unwrap_or(100) as usize;
+        let page = self.page.unwrap_or(1).max(1) as usize;
+        let offset = (page - 1) * limit;
 
-        // Skip instruments based on offset
-        if offset >= instruments.len() {
-            return Vec::new();
-        }
-
-        // Take only the requested number of instruments
         instruments.into_iter().skip(offset).take(limit).collect()
     }
 }
@@ -1433,42 +1408,100 @@ mod tests {
         }
 
         #[test]
-        fn test_page_calculation_fix() {
-            // Test the integer division bug fix
-            let _tool = GetInstrumentsTool {
-                limit: Some(100),
-                page: Some(2), // Test page 2 directly
-                ..Default::default()
-            };
-
-            let limit = 100;
-            let offset = 199;
-
-            // Test our fixed ceiling division formula
-            let current_page = (offset + limit - 1) / limit;
-            assert_eq!(current_page, 2); // 199 + 100 - 1 = 298, 298/100 = 2
-
-            // Test edge cases
-            assert_eq!((100 + 100 - 1) / 100, 1); // offset 100 = page 1
-            assert_eq!((101 + 100 - 1) / 100, 2); // offset 101 = page 2
-            assert_eq!((200 + 100 - 1) / 100, 2); // offset 200 = page 2
-            assert_eq!((201 + 100 - 1) / 100, 3); // offset 201 = page 3
-        }
-
-        #[test]
-        fn test_apply_pagination_max_limit_enforcement() {
+        fn test_apply_pagination_large_limit() {
             let tool = GetInstrumentsTool {
                 search: None,
                 instrument_type: None,
-                limit: Some(2000), // Exceeds max of 1000
+                limit: Some(2000), // Large limit
                 page: None,
             };
 
             let instruments = create_test_instruments(1500);
             let result = tool.apply_pagination(instruments);
 
-            // Should enforce max limit of 1000
-            assert_eq!(result.len(), 1000);
+            // Should use the requested limit of 2000, but only 1500 instruments available
+            assert_eq!(result.len(), 1500);
+        }
+
+        #[test]
+        fn test_pagination_edge_cases() {
+            // Test page 0 should be treated as page 1
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(10),
+                page: Some(0),
+            };
+            let instruments = create_test_instruments(25);
+            let result = tool.apply_pagination(instruments);
+            assert_eq!(result.len(), 10);
+            assert_eq!(result[0].ticker, "INSTRUMENT_0"); // Should start from beginning
+
+            // Test very large page number
+            let tool = GetInstrumentsTool {
+                search: None,
+                instrument_type: None,
+                limit: Some(10),
+                page: Some(1_000_000), // Very large page
+            };
+            let instruments = create_test_instruments(25);
+            let result = tool.apply_pagination(instruments);
+            assert_eq!(result.len(), 0); // Should return empty
+        }
+
+        #[test]
+        fn test_has_more_pages_logic() {
+            use super::create_paginated_response;
+
+            // Test case 1: Full page returned, more pages available
+            let data = vec!["item1", "item2", "item3", "item4", "item5"];
+            let result = create_paginated_response(&data, "items", 5, 20, 1, 5);
+            assert!(result.is_ok());
+            let response_text = format!("{:?}", result.unwrap());
+            assert!(response_text.contains("Try page=2"));
+
+            // Test case 2: Partial page returned, final page
+            let data = vec!["item1", "item2", "item3"];
+            let result = create_paginated_response(&data, "items", 3, 23, 5, 5);
+            assert!(result.is_ok());
+            let response_text = format!("{:?}", result.unwrap());
+            assert!(response_text.contains("Final page"));
+
+            // Test case 3: Empty result set
+            let data: Vec<String> = vec![];
+            let result = create_paginated_response(&data, "items", 0, 0, 1, 10);
+            assert!(result.is_ok());
+            let response_text = format!("{:?}", result.unwrap());
+            assert!(response_text.contains("Final page"));
+
+            // Test case 4: Exactly at boundary (returned_count == limit but no more data)
+            let data = vec!["item1", "item2", "item3", "item4", "item5"];
+            let result = create_paginated_response(&data, "items", 5, 5, 1, 5);
+            assert!(result.is_ok());
+            let response_text = format!("{:?}", result.unwrap());
+            assert!(response_text.contains("Final page"));
+        }
+
+        #[test]
+        fn test_pagination_response_format() {
+            use super::create_paginated_response;
+
+            // Test that response is created successfully
+            let data = vec!["test_item"];
+            let result = create_paginated_response(&data, "widgets", 1, 10, 2, 5);
+            assert!(result.is_ok());
+
+            // Test with more pages available
+            let result_more = create_paginated_response(&data, "items", 5, 20, 2, 5);
+            assert!(result_more.is_ok());
+
+            // Test final page
+            let result_final = create_paginated_response(&data, "items", 3, 13, 3, 5);
+            assert!(result_final.is_ok());
+
+            // These tests verify the function completes successfully
+            // The actual text content formatting is tested indirectly through
+            // the pagination logic tests above
         }
 
         fn create_test_instruments(count: usize) -> Vec<Instrument> {
