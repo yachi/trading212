@@ -5,10 +5,8 @@
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
-const ONE: NonZeroU32 = match NonZeroU32::new(1) {
-    Some(n) => n,
-    None => panic!("1 is not zero"),
-};
+/// Single request burst limit for rate limiters
+const ONE: NonZeroU32 = NonZeroU32::MIN;
 
 use governor::{clock::QuantaClock, state::NotKeyed, Quota, RateLimiter};
 use moka::future::Cache;
@@ -16,6 +14,51 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 
 use crate::{config::Trading212Config, errors::Trading212Error};
+
+// Rate limits based on Trading212 API documentation
+// https://t212public-api-docs.redoc.ly/
+const INSTRUMENTS_RATE_LIMIT_SECS: u64 = 50; // Strictest limit
+const PIES_LIST_RATE_LIMIT_SECS: u64 = 30;
+const PIE_DETAIL_RATE_LIMIT_SECS: u64 = 5;
+const ACCOUNT_RATE_LIMIT_SECS: u64 = 30;
+const ORDERS_RATE_LIMIT_SECS: u64 = 5;
+
+// Cache TTLs with buffer over rate limits
+const INSTRUMENTS_CACHE_TTL_SECS: u64 = 60; // 60s TTL for 50s rate limit
+const PIES_CACHE_TTL_SECS: u64 = 40; // 40s TTL for 30s rate limit
+const DETAIL_CACHE_TTL_SECS: u64 = 15; // 15s TTL for 5s rate limit
+
+/// Endpoint classification for routing to appropriate cache and rate limiter
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointType {
+    Instruments,
+    PiesList,
+    PieDetail,
+    Account,
+    Orders,
+    Unknown,
+}
+
+impl EndpointType {
+    /// Classify an endpoint path into its type
+    fn from_path(endpoint: &str) -> Self {
+        if endpoint.contains("metadata/instruments") {
+            Self::Instruments
+        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() >= 2
+        {
+            // Matches "/equity/pies/{id}" pattern
+            Self::PieDetail
+        } else if endpoint.contains("pies") {
+            Self::PiesList
+        } else if endpoint.contains("account") {
+            Self::Account
+        } else if endpoint.contains("orders") {
+            Self::Orders
+        } else {
+            Self::Unknown
+        }
+    }
+}
 
 /// Cache key for Trading212 API requests
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -28,11 +71,26 @@ pub struct CacheKey {
 
 impl CacheKey {
     /// Create a new cache key from endpoint and parameters
+    /// Parameters are normalized by sorting query parameters for consistency
     pub fn new(endpoint: impl Into<String>, params: impl Into<String>) -> Self {
+        let params_str = params.into();
+        let normalized_params = Self::normalize_params(&params_str);
+
         Self {
             endpoint: endpoint.into(),
-            params: params.into(),
+            params: normalized_params,
         }
+    }
+
+    /// Normalize query parameters by sorting them for consistent cache keys
+    fn normalize_params(params: &str) -> String {
+        if params.is_empty() {
+            return String::new();
+        }
+
+        let mut param_pairs: Vec<&str> = params.split('&').collect();
+        param_pairs.sort_unstable();
+        param_pairs.join("&")
     }
 }
 
@@ -44,8 +102,9 @@ pub struct EndpointLimits {
 }
 
 impl EndpointLimits {
-    /// Create endpoint limits from requests per second
-    pub const fn per_seconds(_requests: u32, seconds: u64) -> Self {
+    /// Create endpoint limits for a given time period in seconds
+    /// Note: Trading212 API enforces single request per period (no bursts)
+    pub const fn from_seconds(seconds: u64) -> Self {
         Self {
             period: Duration::from_secs(seconds),
         }
@@ -76,44 +135,44 @@ impl Trading212Cache {
     /// Returns an error if rate limiter configuration is invalid
     pub fn new() -> Result<Self, Trading212Error> {
         // Rate limiters based on Trading212 API documentation
-        let instruments_limits = EndpointLimits::per_seconds(1, 50); // 1 request per 50 seconds (strictest)
+        let instruments_limits = EndpointLimits::from_seconds(INSTRUMENTS_RATE_LIMIT_SECS);
         let instruments_limiter = Arc::new(Self::create_limiter(&instruments_limits)?);
 
-        let pies_limits = EndpointLimits::per_seconds(1, 30); // 1 request per 30 seconds
+        let pies_limits = EndpointLimits::from_seconds(PIES_LIST_RATE_LIMIT_SECS);
         let pies_limiter = Arc::new(Self::create_limiter(&pies_limits)?);
 
-        let pie_detail_limits = EndpointLimits::per_seconds(1, 5); // 1 request per 5 seconds
+        let pie_detail_limits = EndpointLimits::from_seconds(PIE_DETAIL_RATE_LIMIT_SECS);
         let pie_detail_limiter = Arc::new(Self::create_limiter(&pie_detail_limits)?);
 
-        let account_limits = EndpointLimits::per_seconds(1, 30); // 1 request per 30 seconds
+        let account_limits = EndpointLimits::from_seconds(ACCOUNT_RATE_LIMIT_SECS);
         let account_limiter = Arc::new(Self::create_limiter(&account_limits)?);
 
-        let orders_limits = EndpointLimits::per_seconds(1, 5); // 1 request per 5 seconds
+        let orders_limits = EndpointLimits::from_seconds(ORDERS_RATE_LIMIT_SECS);
         let orders_limiter = Arc::new(Self::create_limiter(&orders_limits)?);
 
         // Create caches with TTLs matching rate limits (with some buffer)
         let instruments_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(60)) // 60s TTL for 50s rate limit
+            .time_to_live(Duration::from_secs(INSTRUMENTS_CACHE_TTL_SECS))
             .max_capacity(200)
             .build();
 
         let pies_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(40)) // 40s TTL for 30s rate limit
+            .time_to_live(Duration::from_secs(PIES_CACHE_TTL_SECS))
             .max_capacity(200)
             .build();
 
         let pie_detail_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(15)) // 15s TTL for 5s rate limit
+            .time_to_live(Duration::from_secs(DETAIL_CACHE_TTL_SECS))
             .max_capacity(200)
             .build();
 
         let account_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(40)) // 40s TTL for 30s rate limit
+            .time_to_live(Duration::from_secs(PIES_CACHE_TTL_SECS)) // Same as pies
             .max_capacity(200)
             .build();
 
         let orders_cache = Cache::builder()
-            .time_to_live(Duration::from_secs(15)) // 15s TTL for 5s rate limit
+            .time_to_live(Duration::from_secs(DETAIL_CACHE_TTL_SECS)) // Same as details
             .max_capacity(200)
             .build();
 
@@ -145,21 +204,12 @@ impl Trading212Cache {
 
     /// Get the appropriate cache for an endpoint
     fn get_cache(&self, endpoint: &str) -> &Cache<CacheKey, String> {
-        if endpoint.contains("metadata/instruments") {
-            &self.instruments_cache
-        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() >= 2
-        {
-            // Matches "/equity/pies/{id}" pattern
-            &self.pie_detail_cache
-        } else if endpoint.contains("pies") {
-            &self.pies_cache
-        } else if endpoint.contains("account") {
-            &self.account_cache
-        } else if endpoint.contains("orders") {
-            &self.orders_cache
-        } else {
-            // Default to instruments cache for unknown endpoints
-            &self.instruments_cache
+        match EndpointType::from_path(endpoint) {
+            EndpointType::PieDetail => &self.pie_detail_cache,
+            EndpointType::PiesList => &self.pies_cache,
+            EndpointType::Account => &self.account_cache,
+            EndpointType::Orders => &self.orders_cache,
+            EndpointType::Instruments | EndpointType::Unknown => &self.instruments_cache, // Default to strictest
         }
     }
 
@@ -168,21 +218,12 @@ impl Trading212Cache {
         &self,
         endpoint: &str,
     ) -> Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>> {
-        if endpoint.contains("metadata/instruments") {
-            self.instruments_limiter.clone()
-        } else if endpoint.contains("pies/") && endpoint.chars().filter(|&c| c == '/').count() >= 2
-        {
-            // Matches "/equity/pies/{id}" pattern
-            self.pie_detail_limiter.clone()
-        } else if endpoint.contains("pies") {
-            self.pies_limiter.clone()
-        } else if endpoint.contains("account") {
-            self.account_limiter.clone()
-        } else if endpoint.contains("orders") {
-            self.orders_limiter.clone()
-        } else {
-            // Default to strictest rate limit for unknown endpoints
-            self.instruments_limiter.clone()
+        match EndpointType::from_path(endpoint) {
+            EndpointType::PieDetail => self.pie_detail_limiter.clone(),
+            EndpointType::PiesList => self.pies_limiter.clone(),
+            EndpointType::Account => self.account_limiter.clone(),
+            EndpointType::Orders => self.orders_limiter.clone(),
+            EndpointType::Instruments | EndpointType::Unknown => self.instruments_limiter.clone(), // Default to strictest
         }
     }
 
@@ -205,7 +246,6 @@ impl Trading212Cache {
     ///
     /// Returns an error if the API request fails, rate limiting fails,
     /// or response parsing fails.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn request<T>(
         &self,
         client: &Client,
@@ -217,24 +257,56 @@ impl Trading212Cache {
         T: DeserializeOwned,
     {
         let cache_key = CacheKey::new(endpoint, params.unwrap_or(""));
-        let cache = self.get_cache(endpoint);
 
         // Check cache first
-        if let Some(cached_response) = cache.get(&cache_key).await {
-            tracing::debug!(endpoint = endpoint, "Using cached response");
-
-            return serde_json::from_str(&cached_response).map_err(|e| {
-                Trading212Error::parse_error(format!("Failed to deserialize cached response: {e}"))
-            });
+        if let Some(cached_response) = self.check_cache(&cache_key, endpoint).await {
+            return cached_response;
         }
 
+        // Apply rate limiting and make request
+        let response_text = self
+            .make_rate_limited_request(client, config, endpoint, params)
+            .await?;
+
+        // Cache and parse the response
+        self.cache_and_parse_response(&cache_key, endpoint, response_text)
+            .await
+    }
+
+    /// Check cache for existing response
+    async fn check_cache<T>(
+        &self,
+        cache_key: &CacheKey,
+        endpoint: &str,
+    ) -> Option<Result<T, Trading212Error>>
+    where
+        T: DeserializeOwned,
+    {
+        let cache = self.get_cache(endpoint);
+
+        cache.get(cache_key).await.map(|cached_response| {
+            tracing::debug!(endpoint = endpoint, "Using cached response");
+
+            serde_json::from_str(&cached_response).map_err(|e| {
+                Trading212Error::parse_error(format!(
+                    "Failed to deserialize cached response from {endpoint}: {e}"
+                ))
+            })
+        })
+    }
+
+    /// Make a rate-limited HTTP request
+    async fn make_rate_limited_request(
+        &self,
+        client: &Client,
+        config: &Trading212Config,
+        endpoint: &str,
+        params: Option<&str>,
+    ) -> Result<String, Trading212Error> {
         // Apply rate limiting
         let limiter = self.get_limiter(endpoint);
-
         tracing::debug!(endpoint = endpoint, "Waiting for rate limit");
-
         limiter.until_ready().await;
-
         tracing::debug!(
             endpoint = endpoint,
             "Rate limit cleared, making API request"
@@ -254,6 +326,15 @@ impl Trading212Cache {
             .await
             .map_err(|e| Trading212Error::request_failed(format!("HTTP request failed: {e}")))?;
 
+        self.handle_response(response, endpoint).await
+    }
+
+    /// Handle HTTP response and extract body text
+    async fn handle_response(
+        &self,
+        response: reqwest::Response,
+        endpoint: &str,
+    ) -> Result<String, Trading212Error> {
         let status = response.status();
         tracing::debug!(
             status_code = status.as_u16(),
@@ -288,9 +369,22 @@ impl Trading212Cache {
             "Successfully received API response"
         );
 
-        // Cache the response for successful requests
-        cache.insert(cache_key, response_text.clone()).await;
+        Ok(response_text)
+    }
 
+    /// Cache response and parse as JSON
+    async fn cache_and_parse_response<T>(
+        &self,
+        cache_key: &CacheKey,
+        endpoint: &str,
+        response_text: String,
+    ) -> Result<T, Trading212Error>
+    where
+        T: DeserializeOwned,
+    {
+        // Cache the response for successful requests
+        let cache = self.get_cache(endpoint);
+        cache.insert(cache_key.clone(), response_text.clone()).await;
         tracing::debug!(endpoint = endpoint, "Response cached successfully");
 
         // Parse and return
@@ -308,11 +402,7 @@ impl Trading212Cache {
     }
 }
 
-impl Default for Trading212Cache {
-    fn default() -> Self {
-        Self::new().unwrap_or_else(|e| panic!("Failed to create default Trading212Cache: {e}"))
-    }
-}
+// Note: No Default implementation provided to avoid panics in default construction
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -339,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_endpoint_limits_creation() {
-        let limits = EndpointLimits::per_seconds(1, 50);
+        let limits = EndpointLimits::from_seconds(50);
         assert_eq!(limits.period, Duration::from_secs(50));
     }
 
