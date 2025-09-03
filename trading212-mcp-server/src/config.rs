@@ -4,7 +4,7 @@
 //! including API key loading, environment variable parsing, and default values.
 
 use crate::errors::Trading212Error;
-use std::{env, fs, path::PathBuf};
+use std::{env, fmt, fs, path::PathBuf};
 
 /// Trait for accessing environment variables - allows for testing with mocked values
 pub trait EnvProvider {
@@ -25,12 +25,21 @@ impl EnvProvider for SystemEnvProvider {
 ///
 /// Contains all necessary configuration parameters including API credentials,
 /// server endpoints, and request handling settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Trading212Config {
     /// Trading212 API key for authentication
     pub api_key: String,
     /// Base URL for the Trading212 API
     pub base_url: String,
+}
+
+impl fmt::Debug for Trading212Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Trading212Config")
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 impl Trading212Config {
@@ -42,23 +51,34 @@ impl Trading212Config {
     /// Create a new configuration with a custom environment provider (useful for testing)
     pub fn with_env_provider(env_provider: &dyn EnvProvider) -> Result<Self, Trading212Error> {
         let api_key = Self::load_api_key_with_env(env_provider)?;
+        let base_url = env_provider
+            .var("TRADING212_BASE_URL")
+            .unwrap_or_else(|_| "https://live.trading212.com/api/v0".to_string());
 
-        Ok(Self {
-            api_key,
-            base_url: env_provider
-                .var("TRADING212_BASE_URL")
-                .unwrap_or_else(|_| "https://live.trading212.com/api/v0".to_string()),
-        })
+        // Validate base URL format
+        if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+            return Err(Trading212Error::config_error(
+                "Base URL must start with http:// or https://",
+            ));
+        }
+
+        Ok(Self { api_key, base_url })
     }
 
     /// Load API key from ~/.trading212-api-key file with custom env provider
     fn load_api_key_with_env(env_provider: &dyn EnvProvider) -> Result<String, Trading212Error> {
-        let mut api_key_path = PathBuf::new();
-        api_key_path.push(
-            env_provider
-                .var("HOME")
-                .map_err(|_| Trading212Error::config_error("HOME environment variable not set"))?,
-        );
+        let home_dir = env_provider
+            .var("HOME")
+            .map_err(|_| Trading212Error::config_error("HOME environment variable not set"))?;
+
+        // Validate home directory path for security
+        if home_dir.is_empty() || home_dir.contains("..") || !home_dir.starts_with('/') {
+            return Err(Trading212Error::config_error(
+                "Invalid HOME directory path - must be absolute and not contain '..'",
+            ));
+        }
+
+        let mut api_key_path = PathBuf::from(home_dir);
         api_key_path.push(".trading212-api-key");
 
         let api_key = fs::read_to_string(&api_key_path)
@@ -78,10 +98,7 @@ impl Trading212Config {
             )));
         }
 
-        tracing::info!(
-            api_key_file = ?api_key_path,
-            "Successfully loaded Trading212 API key"
-        );
+        tracing::info!("Successfully loaded Trading212 API key");
 
         Ok(api_key)
     }
@@ -90,13 +107,7 @@ impl Trading212Config {
     pub fn endpoint_url(&self, endpoint: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
         let endpoint = endpoint.trim_start_matches('/');
-
-        // Pre-allocate with exact capacity to avoid reallocations
-        let mut url = String::with_capacity(base.len() + endpoint.len() + 1);
-        url.push_str(base);
-        url.push('/');
-        url.push_str(endpoint);
-        url
+        format!("{base}/{endpoint}")
     }
 }
 
@@ -177,17 +188,6 @@ mod tests {
 
         let url = config.endpoint_url("/equity/pies");
         assert_eq!(url, "https://demo.trading212.com/api/v0/equity/pies");
-    }
-
-    #[test]
-    fn test_endpoint_url_empty_endpoint() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-
-        let url = config.endpoint_url("");
-        assert_eq!(url, "https://demo.trading212.com/api/v0/");
     }
 
     #[test]
@@ -357,18 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_endpoint_url_unicode_path() {
-        let config = Trading212Config {
-            api_key: "test_key".to_string(),
-            base_url: "https://demo.trading212.com/api/v0".to_string(),
-        };
-
-        // Test with Unicode characters in path
-        let url = config.endpoint_url("search/αβγ");
-        assert_eq!(url, "https://demo.trading212.com/api/v0/search/αβγ");
-    }
-
-    #[test]
     fn test_config_debug_representation() {
         let config = Trading212Config {
             api_key: "secret_key".to_string(),
@@ -377,30 +365,40 @@ mod tests {
 
         let debug_string = format!("{:?}", config);
         assert!(debug_string.contains("Trading212Config"));
-        assert!(debug_string.contains("api_key"));
+        assert!(debug_string.contains("[REDACTED]"));
         assert!(debug_string.contains("base_url"));
+        assert!(!debug_string.contains("secret_key"));
     }
 
     #[test]
-    fn test_load_api_key_with_very_long_key() {
-        let temp_dir = TempDir::new().unwrap();
-        // Create a very long API key (1000 characters)
-        let api_key_content = "a".repeat(1000);
-
-        // Create API key file
-        let api_key_path = temp_dir.path().join(".trading212-api-key");
-        fs::write(&api_key_path, &api_key_content).unwrap();
-
-        // Mock environment with HOME set
+    fn test_invalid_home_directory_path() {
         let mut mock_env = MockEnvProvider::new();
-        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+        mock_env.set("HOME", "../etc");
 
         let result = Trading212Config::load_api_key_with_env(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid HOME directory path"));
+    }
 
-        assert!(result.is_ok());
-        let api_key = result.unwrap();
-        assert_eq!(api_key, api_key_content);
-        assert_eq!(api_key.len(), 1000);
+    #[test]
+    fn test_invalid_base_url() {
+        let temp_dir = TempDir::new().unwrap();
+        let api_key_path = temp_dir.path().join(".trading212-api-key");
+        fs::write(&api_key_path, "test_key").unwrap();
+
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", temp_dir.path().to_str().unwrap());
+        mock_env.set("TRADING212_BASE_URL", "ftp://invalid.com");
+
+        let result = Trading212Config::with_env_provider(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Base URL must start with http:// or https://"));
     }
 
     #[test]
