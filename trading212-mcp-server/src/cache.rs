@@ -203,7 +203,7 @@ impl Trading212Cache {
     }
 
     /// Get the appropriate cache for an endpoint
-    fn get_cache(&self, endpoint: &str) -> &Cache<CacheKey, String> {
+    pub fn get_cache(&self, endpoint: &str) -> &Cache<CacheKey, String> {
         match EndpointType::from_path(endpoint) {
             EndpointType::PieDetail => &self.pie_detail_cache,
             EndpointType::PiesList => &self.pies_cache,
@@ -214,7 +214,7 @@ impl Trading212Cache {
     }
 
     /// Get the appropriate rate limiter for an endpoint
-    fn get_limiter(
+    pub fn get_limiter(
         &self,
         endpoint: &str,
     ) -> Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>> {
