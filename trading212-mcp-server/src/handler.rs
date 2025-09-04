@@ -10,6 +10,8 @@ use rust_mcp_sdk::schema::{
     ListToolsResult, RpcError,
 };
 use rust_mcp_sdk::{error::McpSdkError, mcp_server::ServerHandler, McpServer};
+use std::time::Instant;
+use uuid::Uuid;
 
 use crate::{
     cache::Trading212Cache, config::Trading212Config, errors::Trading212Error,
@@ -39,32 +41,49 @@ impl Trading212Handler {
     /// Returns an error if configuration loading, HTTP client creation, or cache setup fails.
     pub fn new() -> Result<Self, McpSdkError> {
         let config = Trading212Config::new().map_err(|e| {
+            tracing::error!(error = %e, "Failed to load Trading212 configuration");
             McpSdkError::from(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                e.to_string(),
+                format!("Configuration error: {e}"),
             ))
         })?;
 
+        let pool_size = std::env::var("TRADING212_POOL_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+
+        let timeout_secs = std::env::var("TRADING212_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
         let client = Client::builder()
             .user_agent("Trading212-MCP-Server/0.1.0")
-            .pool_max_idle_per_host(2) // Optimize connection pooling
-            .timeout(std::time::Duration::from_secs(30)) // Prevent hanging requests
+            .pool_max_idle_per_host(pool_size)
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .connection_verbose(false)
             .build()
             .map_err(|e| {
+                tracing::error!(error = %e, "Failed to create HTTP client");
                 McpSdkError::from(std::io::Error::other(format!(
-                    "Failed to create HTTP client: {e}"
+                    "HTTP client initialization failed: {e}"
                 )))
             })?;
 
         let cache = Trading212Cache::new().map_err(|e| {
+            tracing::error!(error = %e, "Failed to initialize cache");
             McpSdkError::from(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Failed to create cache: {e}"),
+                format!("Cache initialization failed: {e}"),
             ))
         })?;
 
         tracing::info!(
             base_url = %config.base_url,
+            pool_size = pool_size,
+            timeout_secs = timeout_secs,
             "Initialized Trading212Handler with caching and rate limiting"
         );
 
@@ -102,9 +121,12 @@ impl ServerHandler for Trading212Handler {
         request: CallToolRequest,
         _runtime: &dyn McpServer,
     ) -> std::result::Result<CallToolResult, CallToolError> {
+        let request_id = Uuid::new_v4();
         let tool_name = &request.params.name;
+        let start_time = Instant::now();
 
         tracing::info!(
+            request_id = %request_id,
             tool = tool_name,
             params = ?request.params,
             "Handling tool call request"
@@ -113,11 +135,14 @@ impl ServerHandler for Trading212Handler {
         // Convert request parameters into Trading212Tools enum
         let tool_params: Trading212Tools = Trading212Tools::try_from(request.params.clone())
             .map_err(|e| {
-                let error = Trading212Error::conversion_error(format!("{e:?}"));
+                let error = Trading212Error::conversion_error(format!(
+                    "Failed to parse parameters for tool '{tool_name}': {e:?}"
+                ));
                 tracing::error!(
+                    request_id = %request_id,
                     tool = tool_name,
                     error = %error,
-                    "Failed to convert tool parameters"
+                    "Tool parameter conversion failed"
                 );
                 CallToolError::new(error)
             })?;
@@ -146,9 +171,22 @@ impl ServerHandler for Trading212Handler {
             }
         };
 
+        let duration = start_time.elapsed();
+
         match &result {
-            Ok(_) => tracing::info!(tool = tool_name, "Tool call completed successfully"),
-            Err(e) => tracing::error!(tool = tool_name, error = %e, "Tool call failed"),
+            Ok(_) => tracing::info!(
+                request_id = %request_id,
+                tool = tool_name,
+                duration_ms = duration.as_millis(),
+                "Tool call completed successfully"
+            ),
+            Err(e) => tracing::error!(
+                request_id = %request_id,
+                tool = tool_name,
+                duration_ms = duration.as_millis(),
+                error = %e,
+                "Tool call failed"
+            ),
         }
 
         result
@@ -206,35 +244,22 @@ mod tests {
     }
 
     #[test]
-    fn test_handler_has_correct_config() {
+    fn test_handler_configuration() {
         let handler = create_test_handler();
+
+        // Test configuration properties
         assert_eq!(handler.config.api_key, "test-api-key");
         assert_eq!(
             handler.config.base_url,
             "https://test.trading212.com/api/v0"
         );
-    }
 
-    #[test]
-    fn test_handler_client_creation() {
-        let handler = create_test_handler();
-
-        // Verify client exists (basic validation)
-        // We can't easily test the client directly without making HTTP requests
+        // Test client creation
         assert!(std::mem::size_of_val(&handler.client) > 0);
-    }
 
-    #[test]
-    fn test_handler_config_validation() {
-        let handler = create_test_handler();
-
-        // Test config endpoint URL generation
+        // Test endpoint URL generation
         let endpoint = handler.config.endpoint_url("test/path");
         assert_eq!(endpoint, "https://test.trading212.com/api/v0/test/path");
-
-        // Test base URL is properly formatted
-        assert!(handler.config.base_url.starts_with("https://"));
-        assert!(!handler.config.base_url.ends_with('/'));
     }
 
     #[test]
@@ -266,48 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn test_client_configuration() {
+    fn test_handler_debug_and_memory() {
         let handler = create_test_handler();
 
-        // Test that the client is configured with the correct user agent
-        // We can't directly access the user agent, but we can verify the client was created
-        assert!(std::mem::size_of_val(&handler.client) > 0);
-
-        // Verify the handler has the expected configuration
-        assert_eq!(handler.config.api_key, "test-api-key");
-        assert!(handler.config.base_url.contains("trading212.com"));
-    }
-
-    #[test]
-    fn test_handler_configuration_properties() {
-        let handler = create_test_handler();
-
-        // Test that configuration is properly set
-        assert_eq!(handler.config.api_key, "test-api-key");
-        assert_eq!(
-            handler.config.base_url,
-            "https://test.trading212.com/api/v0"
-        );
-
-        // Test endpoint URL generation
-        let endpoint = handler.config.endpoint_url("equity/pies");
-        assert_eq!(endpoint, "https://test.trading212.com/api/v0/equity/pies");
-    }
-
-    #[test]
-    fn test_handler_debug_representation() {
-        let handler = create_test_handler();
-
-        // Test that the handler can be formatted for debugging
+        // Test debug representation
         let debug_string = format!("{:?}", handler.config);
         assert!(debug_string.contains("Trading212Config"));
         assert!(debug_string.contains("api_key"));
         assert!(debug_string.contains("base_url"));
-    }
-
-    #[test]
-    fn test_handler_memory_size() {
-        let handler = create_test_handler();
 
         // Verify handler has reasonable memory footprint
         assert!(std::mem::size_of_val(&handler) > 0);
@@ -334,29 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn test_handler_struct_fields() {
-        let handler = create_test_handler();
-
-        // Test that handler fields are accessible and properly configured
-        assert!(!handler.config.api_key.is_empty());
-        assert!(!handler.config.base_url.is_empty());
-
-        // Test client exists and is valid size
-        assert!(std::mem::size_of_val(&handler.client) > 0);
-    }
-
-    #[test]
-    fn test_handler_struct_debug() {
-        let handler = create_test_handler();
-
-        // Test that handler config can be debugged
-        let debug_string = format!("{:?}", handler.config);
-        assert!(debug_string.contains("Trading212Config"));
-        assert!(debug_string.contains("api_key"));
-        assert!(debug_string.contains("base_url"));
-    }
-
-    #[test]
     fn test_handler_new_with_client_error() {
         // Test error handling during client creation
         // We can't easily mock Client::builder(), but we can verify error propagation works
@@ -371,22 +339,18 @@ mod tests {
     }
 
     #[test]
-    fn test_server_handler_trait_implementation() {
-        // Test that Trading212Handler properly implements ServerHandler trait
+    fn test_server_handler_trait_and_tracing() {
         let handler = create_test_handler();
 
-        // Verify the handler has the expected structure for ServerHandler
-        assert!(!handler.config.api_key.is_empty());
-        assert!(!handler.config.base_url.is_empty());
-        assert!(std::mem::size_of_val(&handler.client) > 0);
-    }
+        // Test ServerHandler trait implementation
+        fn requires_server_handler(_: &dyn ServerHandler) {}
+        requires_server_handler(&handler);
 
-    #[test]
-    fn test_handler_logging_tracing() {
-        // Test that handler creation includes proper tracing setup
-        let handler = create_test_handler();
+        // Verify handler implements Send and Sync for async usage
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Trading212Handler>();
 
-        // Verify handler configuration for tracing
+        // Test tracing configuration
         assert!(handler.config.base_url.contains("trading212"));
         assert!(!handler.config.api_key.is_empty());
     }
@@ -696,43 +660,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tracing_and_logging_paths() {
-        // Test tracing setup used in the handler
-        let handler = create_test_handler();
-
-        // Test that tracing info that would be logged in ServerHandler methods works
-        let test_tools = Trading212Tools::tools();
-
-        // Simulate the debug logging from handle_list_tools_request
-        let tool_names: Vec<_> = test_tools.iter().map(|t| &t.name).collect();
-        assert_eq!(tool_names.len(), 4);
-        assert!(tool_names.contains(&&"get_instruments".to_string()));
-        assert!(tool_names.contains(&&"get_pies".to_string()));
-        assert!(tool_names.contains(&&"get_pie_by_id".to_string()));
-
-        // Test handler initialization logging components
-        assert!(handler.config.base_url.starts_with("http"));
-        assert!(!handler.config.api_key.is_empty());
-    }
-
-    #[test]
-    fn test_handler_server_trait_bounds() {
-        // Test that Trading212Handler implements ServerHandler trait correctly
-        let handler = create_test_handler();
-
-        // Test that handler can be used where ServerHandler is required
-        fn requires_server_handler(_: &dyn ServerHandler) {}
-        requires_server_handler(&handler);
-
-        // Test that the handler has the expected traits
-        assert!(std::mem::size_of::<Trading212Handler>() > 0);
-
-        // Verify handler implements Send and Sync for async usage
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<Trading212Handler>();
-    }
-
-    #[test]
     fn test_handler_error_path_coverage() {
         // Test error handling paths that might not be covered
         use crate::errors::Trading212Error;
@@ -753,22 +680,16 @@ mod tests {
     }
 
     #[test]
-    fn test_handler_configuration_edge_cases() {
-        // Test handler configuration paths
+    fn test_endpoint_url_edge_cases() {
         let handler = create_test_handler();
 
-        // Test endpoint URL building with various paths
-        let endpoint_tests = vec![("/test", "/test"), ("test", "/test"), ("", "/"), ("/", "/")];
+        let test_cases = vec![("/test", "/test"), ("test", "/test"), ("", "/"), ("/", "/")];
 
-        for (input, expected) in endpoint_tests {
+        for (input, expected) in test_cases {
             let url = handler.config.endpoint_url(input);
             assert!(url.ends_with(expected), "Failed for input: {}", input);
-            assert!(url.contains("trading212"), "URL should contain trading212");
+            assert!(url.contains("trading212"));
         }
-
-        // Test config properties
-        assert!(!handler.config.api_key.is_empty());
-        assert!(handler.config.base_url.starts_with("http"));
     }
 
     #[tokio::test]
