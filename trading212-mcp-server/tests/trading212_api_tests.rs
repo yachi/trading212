@@ -16,7 +16,7 @@ use trading212_mcp_server::{
     tools::Trading212Tools,
 };
 use wiremock::{
-    matchers::{method, path, query_param},
+    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -83,10 +83,9 @@ async fn create_test_handler_with_mock_api() -> (Trading212Handler, MockServer) 
 async fn test_get_instruments_tool_execution() {
     let (handler, mock_server) = create_test_handler_with_mock_api().await;
 
-    // Mock successful instruments response
+    // Mock successful instruments response (no query parameters expected)
     Mock::given(method("GET"))
         .and(path("/equity/metadata/instruments"))
-        .and(query_param("search", "AAPL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "isin": "US0378331005",
@@ -97,6 +96,17 @@ async fn test_get_instruments_tool_execution() {
                 "workingScheduleId": 1,
                 "shortName": "Apple",
                 "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            },
+            {
+                "isin": "US5949181045",
+                "ticker": "MSFT",
+                "name": "Microsoft Corporation",
+                "type": "STOCK",
+                "currencyCode": "USD",
+                "workingScheduleId": 1,
+                "shortName": "Microsoft",
+                "maxOpenQuantity": 2000.0,
                 "addedOn": "2020-01-01"
             }
         ])))

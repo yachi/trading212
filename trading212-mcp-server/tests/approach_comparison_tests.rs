@@ -1,5 +1,12 @@
 //! Integration tests comparing standard vs streaming approaches for correctness and performance
 
+#![allow(
+    unused_crate_dependencies,
+    clippy::unwrap_used,
+    unused_variables,
+    clippy::single_char_pattern
+)]
+
 use reqwest::Client;
 use std::collections::HashSet;
 use trading212_mcp_server::cache::Trading212Cache;
@@ -93,6 +100,10 @@ fn extract_tickers_from_response(response: &str) -> HashSet<String> {
 
 #[tokio::test]
 async fn test_both_approaches_return_same_results() {
+    // Ensure clean environment for this test
+    std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
+
     let (client, config, cache) = setup_test_environment().await;
 
     let tool = GetInstrumentsTool {
@@ -102,8 +113,8 @@ async fn test_both_approaches_return_same_results() {
         page: Some(1),
     };
 
-    // Test standard approach
-    std::env::remove_var("TRADING212_USE_STREAMING");
+    // Test standard approach (force it since streaming is now default)
+    std::env::set_var("TRADING212_USE_STANDARD", "1");
     let standard_result = tool.call_tool(&client, &config, &cache).await;
     assert!(standard_result.is_ok(), "Standard approach should succeed");
 
@@ -130,10 +141,15 @@ async fn test_both_approaches_return_same_results() {
 
     // Cleanup
     std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
 }
 
 #[tokio::test]
 async fn test_search_filtering_consistency() {
+    // Ensure clean environment for this test
+    std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
+
     let (client, config, cache) = setup_test_environment().await;
 
     let tool = GetInstrumentsTool {
@@ -143,8 +159,8 @@ async fn test_search_filtering_consistency() {
         page: Some(1),
     };
 
-    // Test standard approach
-    std::env::remove_var("TRADING212_USE_STREAMING");
+    // Test standard approach (force it since streaming is now default)
+    std::env::set_var("TRADING212_USE_STANDARD", "1");
     let standard_result = tool.call_tool(&client, &config, &cache).await;
 
     // Test streaming approach
@@ -170,10 +186,15 @@ async fn test_search_filtering_consistency() {
 
     // Cleanup
     std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
 }
 
 #[tokio::test]
 async fn test_type_filtering_consistency() {
+    // Ensure clean environment for this test
+    std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
+
     let (client, config, cache) = setup_test_environment().await;
 
     let tool = GetInstrumentsTool {
@@ -183,8 +204,8 @@ async fn test_type_filtering_consistency() {
         page: Some(1),
     };
 
-    // Test standard approach
-    std::env::remove_var("TRADING212_USE_STREAMING");
+    // Test standard approach (force it since streaming is now default)
+    std::env::set_var("TRADING212_USE_STANDARD", "1");
     let standard_result = tool.call_tool(&client, &config, &cache).await;
 
     // Test streaming approach
@@ -216,10 +237,15 @@ async fn test_type_filtering_consistency() {
 
     // Cleanup
     std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
 }
 
 #[tokio::test]
 async fn test_pagination_consistency() {
+    // Ensure clean environment for this test
+    std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
+
     let (client, config, cache) = setup_test_environment().await;
 
     let tool = GetInstrumentsTool {
@@ -229,8 +255,8 @@ async fn test_pagination_consistency() {
         page: Some(1),
     };
 
-    // Test standard approach
-    std::env::remove_var("TRADING212_USE_STREAMING");
+    // Test standard approach (force it since streaming is now default)
+    std::env::set_var("TRADING212_USE_STANDARD", "1");
     let standard_result = tool.call_tool(&client, &config, &cache).await;
 
     // Test streaming approach
@@ -263,10 +289,15 @@ async fn test_pagination_consistency() {
 
     // Cleanup
     std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
 }
 
 #[tokio::test]
 async fn test_approach_selection_logic() {
+    // Ensure clean environment for this test
+    std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
+
     let (client, config, cache) = setup_test_environment().await;
 
     // Test that selective queries trigger streaming
@@ -295,7 +326,7 @@ async fn test_approach_selection_logic() {
         "Type-only filters should use streaming"
     );
 
-    // Test that large queries use standard approach
+    // Test that large queries now use streaming approach (new default)
     let large_tool = GetInstrumentsTool {
         search: None,
         instrument_type: None,
@@ -304,8 +335,8 @@ async fn test_approach_selection_logic() {
     };
 
     assert!(
-        !large_tool.should_use_streaming(),
-        "Large queries should use standard approach"
+        large_tool.should_use_streaming(),
+        "Large queries should use streaming approach (new default)"
     );
 
     // Test forced streaming via environment
@@ -316,4 +347,5 @@ async fn test_approach_selection_logic() {
     );
 
     std::env::remove_var("TRADING212_USE_STREAMING");
+    std::env::remove_var("TRADING212_USE_STANDARD");
 }

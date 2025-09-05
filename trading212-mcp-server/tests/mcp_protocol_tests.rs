@@ -24,7 +24,7 @@ use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
 use wiremock::{
-    matchers::{method, path, query_param},
+    matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -205,15 +205,14 @@ async fn test_real_mcp_list_tools() {
     assert!(tool_names.contains(&"update_pie"));
 }
 
-/// Real integration test: Call get_instruments tool via MCP protocol
+/// Real integration test: Call get_instruments tool via MCP protocol with client-side filtering
 #[tokio::test]
 async fn test_real_mcp_call_get_instruments() {
     let mock_server = MockServer::start().await;
 
-    // Mock successful instruments response
+    // Mock successful instruments response (returns all instruments, no query parameters)
     Mock::given(method("GET"))
         .and(path("/equity/metadata/instruments"))
-        .and(query_param("search", "AAPL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "isin": "US0378331005",
@@ -224,6 +223,17 @@ async fn test_real_mcp_call_get_instruments() {
                 "workingScheduleId": 1,
                 "shortName": "Apple",
                 "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            },
+            {
+                "isin": "US5949181045",
+                "ticker": "MSFT",
+                "name": "Microsoft Corporation",
+                "type": "STOCK",
+                "currencyCode": "USD",
+                "workingScheduleId": 1,
+                "shortName": "Microsoft",
+                "maxOpenQuantity": 2000.0,
                 "addedOn": "2020-01-01"
             }
         ])))
