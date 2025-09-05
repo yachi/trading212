@@ -15,6 +15,8 @@
 //! The module provides comprehensive data structures matching the Trading212 API responses,
 //! including [`Instrument`], [`Pie`], [`DividendDetails`], and [`PieResult`].
 
+#![allow(missing_docs)] // Allow missing docs for JsonSchema generated code
+
 use reqwest::Client;
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use rust_mcp_sdk::{
@@ -74,8 +76,12 @@ where
     // Calculate pagination metadata
     let has_more =
         returned_count == limit as usize && (page as usize * limit as usize) < total_count;
-    
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     let total_pages = (total_count as f64 / f64::from(limit)).ceil() as u32;
 
     // Create navigation hints
@@ -216,6 +222,7 @@ pub struct PieResult {
 /// Represents the target allocation of a specific instrument within an investment pie.
 /// The weight represents the percentage allocation as a decimal (e.g., 0.25 = 25%).
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[allow(missing_docs)]
 pub struct InstrumentAllocation {
     /// Stock ticker symbol (e.g., "AAPL", "GOOGL")
     pub ticker: String,
@@ -319,6 +326,7 @@ pub struct DetailedPieResponse {
 /// Uses an optimized streaming parser by default for efficient memory usage and fast performance
 /// with Trading212's 3.4MB instrument dataset (15,467+ instruments). Provides optional filtering
 /// by search terms and instrument types with client-side pagination for large result sets.
+#[allow(missing_docs)]
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct GetInstrumentsTool {
     /// Optional search term to filter instruments (e.g., "AAPL", "Apple")
@@ -354,6 +362,7 @@ pub struct GetInstrumentsTool {
 ///
 /// Returns a complete list of the user's investment pies with summary information
 /// including performance metrics, cash balances, and current status.
+#[allow(missing_docs)]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPiesTool {}
 
@@ -370,6 +379,7 @@ pub struct GetPiesTool {}
 ///
 /// Provides comprehensive details about a pie including individual instrument holdings,
 /// allocation percentages, performance metrics, and configuration settings.
+#[allow(missing_docs)]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetPieByIdTool {
     /// The unique identifier of the pie to retrieve (must be positive)
@@ -389,6 +399,7 @@ pub struct GetPieByIdTool {
 ///
 /// Allows modification of pie settings including instrument allocations, name, goal,
 /// dividend handling, and other configuration parameters. At least one field must be provided.
+#[allow(missing_docs)]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdatePieTool {
     /// The unique identifier of the pie to update (must be positive)
@@ -451,24 +462,24 @@ impl GetInstrumentsTool {
     pub fn should_use_streaming(&self) -> bool {
         // Based on real Trading212 data benchmarks (3.4MB, 15,467 instruments):
         // Streaming is 300-400x faster for most queries and uses 3x less memory
-        
+
         // Force streaming via environment (for testing/comparison)
         if std::env::var("TRADING212_USE_STREAMING").is_ok() {
             return true;
         }
-        
-        // Force standard approach via environment (for testing/comparison) 
+
+        // Force standard approach via environment (for testing/comparison)
         if std::env::var("TRADING212_USE_STANDARD").is_ok() {
             return false;
         }
-        
+
         // Use streaming by default for Trading212's 3.4MB dataset
         // Only use standard for very specific tiny searches where cache lookup is faster
-        let tiny_specific_search = self.search.is_some() 
+        let tiny_specific_search = self.search.is_some()
             && self.limit.unwrap_or(100) <= 3
             && self.instrument_type.is_none()
             && self.page.unwrap_or(1) == 1;
-        
+
         !tiny_specific_search
     }
 
@@ -480,20 +491,21 @@ impl GetInstrumentsTool {
         cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         let start = std::time::Instant::now();
-        
+
         // Fetch all instruments (no server-side filtering)
-        let all_instruments = self
-            .fetch_instruments(client, config, cache)
-            .await?;
+        let all_instruments = self.fetch_instruments(client, config, cache).await?;
 
         let fetch_duration = start.elapsed();
-        tracing::debug!(duration_ms = fetch_duration.as_millis(), "Instruments fetched");
+        tracing::debug!(
+            duration_ms = fetch_duration.as_millis(),
+            "Instruments fetched"
+        );
 
         // Apply client-side filtering
         let filter_start = std::time::Instant::now();
         let filtered_instruments = self.apply_client_side_filtering(all_instruments);
         let filter_duration = filter_start.elapsed();
-        
+
         tracing::debug!(
             filter_duration_ms = filter_duration.as_millis(),
             total_duration_ms = start.elapsed().as_millis(),
@@ -512,18 +524,18 @@ impl GetInstrumentsTool {
         cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
         let start = std::time::Instant::now();
-        
+
         // Get raw JSON response from cache
         let response_text = self.fetch_raw_json(client, config, cache).await?;
-        
+
         let fetch_duration = start.elapsed();
         tracing::debug!(duration_ms = fetch_duration.as_millis(), "Raw JSON fetched");
 
         // Stream parse and filter in one pass
         let stream_start = std::time::Instant::now();
-        let filtered_instruments = self.stream_parse_and_filter(&response_text);
+        let filtered_instruments = self.stream_parse_and_filter(&response_text)?;
         let stream_duration = stream_start.elapsed();
-        
+
         tracing::debug!(
             stream_duration_ms = stream_duration.as_millis(),
             total_duration_ms = start.elapsed().as_millis(),
@@ -535,6 +547,7 @@ impl GetInstrumentsTool {
     }
 
     /// Fetch raw JSON response from cache for streaming processing
+    #[allow(clippy::cognitive_complexity)]
     async fn fetch_raw_json(
         &self,
         client: &Client,
@@ -544,7 +557,7 @@ impl GetInstrumentsTool {
         // Get cache key for instruments endpoint
         let cache_key = crate::cache::CacheKey::new("equity/metadata/instruments", "");
         let instruments_cache = cache.get_cache("equity/metadata/instruments");
-        
+
         // Check cache first
         if let Some(cached_response) = instruments_cache.get(&cache_key).await {
             tracing::debug!("Using cached JSON response for streaming");
@@ -563,9 +576,11 @@ impl GetInstrumentsTool {
             .header("Authorization", &config.api_key)
             .send()
             .await
-            .map_err(|e| CallToolError::new(crate::errors::Trading212Error::request_failed(
-                format!("HTTP request failed: {e}")
-            )))?;
+            .map_err(|e| {
+                CallToolError::new(crate::errors::Trading212Error::request_failed(format!(
+                    "HTTP request failed: {e}"
+                )))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -573,35 +588,53 @@ impl GetInstrumentsTool {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(CallToolError::new(crate::errors::Trading212Error::api_error(
-                status.as_u16(),
-                error_text,
-            )));
+            return Err(CallToolError::new(
+                crate::errors::Trading212Error::api_error(status.as_u16(), error_text),
+            ));
         }
 
         let response_text = response.text().await.map_err(|e| {
-            CallToolError::new(crate::errors::Trading212Error::request_failed(
-                format!("Failed to read response body: {e}")
-            ))
+            CallToolError::new(crate::errors::Trading212Error::request_failed(format!(
+                "Failed to read response body: {e}"
+            )))
         })?;
 
         // Cache the response
-        instruments_cache.insert(cache_key, response_text.clone()).await;
+        instruments_cache
+            .insert(cache_key, response_text.clone())
+            .await;
         tracing::debug!("Raw JSON response cached for streaming");
 
         Ok(response_text)
     }
 
     /// Stream parse and filter JSON in one pass to minimize memory usage
-    fn stream_parse_and_filter(&self, json_text: &str) -> Vec<Instrument> {
-        use serde_json::Deserializer;
-        
+    #[allow(clippy::cognitive_complexity)]
+    fn stream_parse_and_filter(&self, json_text: &str) -> Result<Vec<Instrument>, CallToolError> {
         tracing::debug!(
             json_size_bytes = json_text.len(),
             "Starting streaming parse and filter"
         );
 
-        let stream = Deserializer::from_str(json_text).into_iter::<Instrument>();
+        // First, validate that this looks like a JSON array
+        let trimmed = json_text.trim();
+        if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+            let error = Trading212Error::parse_error("Response is not a valid JSON array");
+            tracing::error!(error = %error, "Invalid JSON structure detected");
+            return Err(CallToolError::new(error));
+        }
+
+        // For true streaming, parse as an array of Values first, then process each element
+        let instruments_array: Vec<serde_json::Value> = match serde_json::from_str(json_text) {
+            Ok(array) => array,
+            Err(e) => {
+                let error =
+                    Trading212Error::parse_error(format!("Failed to parse JSON array: {e}"));
+                tracing::error!(error = %error, "JSON parsing failed");
+                return Err(CallToolError::new(error));
+            }
+        };
+
         let mut filtered_instruments = Vec::new();
         let mut processed_count = 0;
         let mut error_count = 0;
@@ -613,17 +646,18 @@ impl GetInstrumentsTool {
         let mut skipped = 0;
         let mut collected = 0;
 
-        for item_result in stream {
+        for json_value in instruments_array {
             processed_count += 1;
-            
-            let instrument = match item_result {
+
+            // Convert JSON value to Instrument
+            let instrument = match serde_json::from_value::<Instrument>(json_value) {
                 Ok(instrument) => instrument,
                 Err(e) => {
                     error_count += 1;
                     tracing::warn!(
                         error = %e,
                         processed_count = processed_count,
-                        "Failed to parse instrument in stream"
+                        "Failed to convert JSON value to instrument"
                     );
                     continue;
                 }
@@ -660,12 +694,22 @@ impl GetInstrumentsTool {
         if error_count > 0 {
             tracing::warn!(
                 error_count = error_count,
-                success_rate = format!("{:.1}%", f64::from(processed_count - error_count) / f64::from(processed_count) * 100.0),
+                success_rate = format!(
+                    "{:.1}%",
+                    f64::from(processed_count - error_count) / f64::from(processed_count) * 100.0
+                ),
                 "Some instruments failed to parse during streaming"
             );
         }
 
-        filtered_instruments
+        // Check if we failed to parse anything at all - could indicate malformed JSON
+        if processed_count == 0 {
+            let error = Trading212Error::parse_error("Response appears to be malformed JSON");
+            tracing::error!(error = %error, "Failed to parse any instruments from response");
+            return Err(CallToolError::new(error));
+        }
+
+        Ok(filtered_instruments)
     }
 
     /// Check if an instrument matches the current filters
@@ -677,7 +721,7 @@ impl GetInstrumentsTool {
                 || instrument.name.to_lowercase().contains(&search_lower)
                 || instrument.short_name.to_lowercase().contains(&search_lower)
                 || instrument.isin.to_lowercase().contains(&search_lower);
-            
+
             if !matches_search {
                 return false;
             }
@@ -1969,7 +2013,7 @@ mod tests {
             ];
 
             let filtered = tool.apply_client_side_filtering(instruments);
-            
+
             // Should only return Figma
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].ticker, "FIG_US_EQ");
@@ -2005,13 +2049,13 @@ mod tests {
                     currency_code: "USD".to_string(),
                     name: "Test ETF".to_string(),
                     short_name: "ETF1".to_string(),
-                    max_open_quantity: 50000000.0,
+                    max_open_quantity: 50_000_000.0,
                     added_on: "2020-01-01T00:00:00.000+00:00".to_string(),
                 },
             ];
 
             let filtered = tool.apply_client_side_filtering(instruments);
-            
+
             // Should only return ETF
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].ticker, "ETF1_US_EQ");
