@@ -64,6 +64,3 @@ features = [
   "run-cargo-test"
 ]
 
-[[bench]]
-name = "trading212_benchmarks"
-harness = false
