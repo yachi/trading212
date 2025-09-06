@@ -2276,42 +2276,48 @@ mod tests {
         // Tests that specifically target the high-priority missed mutations
         // These tests use edge cases where mutations would cause obvious failures
         let data = serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3}]);
-        
+
         // MUTATION: Line 78 - page * limit vs page + limit in has_more calculation
-        // Case: page=1000, limit=1, total=1000 
+        // Case: page=1000, limit=1, total=1000
         // Correct: 1000*1 = 1000, 1000 < 1000 is false (no more pages) ✓
         // Mutated:  1000+1 = 1001, 1001 < 1000 is false (same result but wrong logic)
         // Better case: page=50, limit=2, total=100
-        // Correct: 50*2 = 100, 100 < 100 is false (no more pages) ✓  
+        // Correct: 50*2 = 100, 100 < 100 is false (no more pages) ✓
         // Mutated:  50+2 = 52, 52 < 100 is true (would have more pages) ✗
         let result = create_paginated_response(&data, "items", 3, 100, 50, 2);
-        assert!(result.is_ok(), "Pagination with boundary multiplication should work");
-        
+        assert!(
+            result.is_ok(),
+            "Pagination with boundary multiplication should work"
+        );
+
         // MUTATION: Line 85 - division vs multiplication/modulo in total_pages calculation
         // Use very distinct values that would cause obvious calculation failures
         // Case: total=100000, limit=1000
         // Correct: ceil(100000/1000) = 100 pages ✓
         // Mutated (* ): ceil(100000*1000) = 100000000 pages (overflow/panic likely) ✗
         // Mutated (% ): ceil(100000%1000) = ceil(0) = 0 pages ✗
-        let result = create_paginated_response(&data, "items", 3, 100000, 1, 1000);
-        assert!(result.is_ok(), "Large pagination calculation should not overflow");
-        
+        let result = create_paginated_response(&data, "items", 3, 100_000, 1, 1000);
+        assert!(
+            result.is_ok(),
+            "Large pagination calculation should not overflow"
+        );
+
         // MUTATION: Line 97 - total_count > 0 vs total_count >= 0
         // Test with exactly zero to ensure correct branch is taken
         let empty_data = serde_json::json!([]);
         let result = create_paginated_response(&empty_data, "items", 0, 0, 1, 10);
         assert!(result.is_ok(), "Zero total count should work");
-        
+
         // MUTATION: Line 105 - returned_count > 0 vs returned_count >= 0
-        // Test with exactly zero returned to ensure correct branch is taken  
+        // Test with exactly zero returned to ensure correct branch is taken
         let result = create_paginated_response(&empty_data, "items", 0, 5, 1, 10);
         assert!(result.is_ok(), "Zero returned count should work");
-        
+
         // Additional edge cases for robustness
         // Very small numbers that would break with wrong operators
         let result = create_paginated_response(&data, "items", 1, 1, 1, 1);
         assert!(result.is_ok(), "Minimal pagination should work");
-        
+
         // Large limit with small total (should not break)
         let result = create_paginated_response(&data, "items", 2, 2, 1, 1000);
         assert!(result.is_ok(), "Large limit with small total should work");
@@ -2320,28 +2326,26 @@ mod tests {
     #[test]
     fn test_validation_function_logical_mutations() {
         // Tests that specifically target the || vs && mutations in validation functions
-        
+
         // MUTATION: Lines 939-941 - apply_client_side_filtering search logic
         // The function uses || to search across multiple fields (ticker, name, short_name, isin)
         // If mutated to &&, would require ALL fields to match instead of ANY field
-        
+
         // Test case: search term that matches only one field
         // With correct ||: should find the instrument (matches ticker) ✓
         // With mutated &&: would not find it (doesn't match ALL fields) ✗
-        let instruments = vec![
-            Instrument {
-                ticker: "AAPL_US_EQ".to_string(),
-                name: "Apple Inc.".to_string(), 
-                short_name: "Apple".to_string(),
-                isin: "US0378331005".to_string(),
-                instrument_type: "STOCK".to_string(),
-                currency_code: "USD".to_string(),
-                working_schedule_id: 1,
-                max_open_quantity: 10000.0,
-                added_on: "2020-01-01".to_string(),
-            }
-        ];
-        
+        let instruments = vec![Instrument {
+            ticker: "AAPL_US_EQ".to_string(),
+            name: "Apple Inc.".to_string(),
+            short_name: "Apple".to_string(),
+            isin: "US0378331005".to_string(),
+            instrument_type: "STOCK".to_string(),
+            currency_code: "USD".to_string(),
+            working_schedule_id: 1,
+            max_open_quantity: 10000.0,
+            added_on: "2020-01-01".to_string(),
+        }];
+
         // Search for "AAPL" (only matches ticker, not name/short_name/isin)
         let tool = GetInstrumentsTool {
             search: Some("AAPL".to_string()),
@@ -2349,21 +2353,29 @@ mod tests {
             limit: Some(10),
             page: Some(1),
         };
-        
+
         let filtered = tool.apply_client_side_filtering(instruments.clone());
-        assert_eq!(filtered.len(), 1, "Should find instrument when searching ticker field");
-        
-        // Search for "Apple" (only matches name and short_name, not ticker/isin) 
+        assert_eq!(
+            filtered.len(),
+            1,
+            "Should find instrument when searching ticker field"
+        );
+
+        // Search for "Apple" (only matches name and short_name, not ticker/isin)
         let tool = GetInstrumentsTool {
             search: Some("Apple".to_string()),
             instrument_type: None,
             limit: Some(10),
             page: Some(1),
         };
-        
+
         let filtered = tool.apply_client_side_filtering(instruments.clone());
-        assert_eq!(filtered.len(), 1, "Should find instrument when searching name/short_name fields");
-        
+        assert_eq!(
+            filtered.len(),
+            1,
+            "Should find instrument when searching name/short_name fields"
+        );
+
         // Search for ISIN (only matches isin field)
         let tool = GetInstrumentsTool {
             search: Some("US0378331005".to_string()),
@@ -2371,10 +2383,14 @@ mod tests {
             limit: Some(10),
             page: Some(1),
         };
-        
+
         let filtered = tool.apply_client_side_filtering(instruments.clone());
-        assert_eq!(filtered.len(), 1, "Should find instrument when searching ISIN field");
-        
+        assert_eq!(
+            filtered.len(),
+            1,
+            "Should find instrument when searching ISIN field"
+        );
+
         // Search for something that matches no fields
         let tool = GetInstrumentsTool {
             search: Some("NONEXISTENT".to_string()),
@@ -2382,47 +2398,47 @@ mod tests {
             limit: Some(10),
             page: Some(1),
         };
-        
-        let filtered = tool.apply_client_side_filtering(instruments.clone());
-        assert_eq!(filtered.len(), 0, "Should not find instrument when no fields match");
+
+        let filtered = tool.apply_client_side_filtering(instruments);
+        assert_eq!(
+            filtered.len(),
+            0,
+            "Should not find instrument when no fields match"
+        );
     }
-    
-    #[test] 
+
+    #[test]
     fn test_json_validation_logical_mutations() {
         use super::*;
-        
+
         // MUTATION: Line 660 - bracket_count < 0 || brace_count < 0
         // If mutated to &&, would only detect error when BOTH are negative
         // Original logic: error if either bracket_count < 0 OR brace_count < 0 ✓
         // Mutated logic: error only if bracket_count < 0 AND brace_count < 0 ✗
-        
-        let tool = GetInstrumentsTool {
-            search: None,
-            instrument_type: None,
-            limit: Some(10),
-            page: Some(1),
-        };
-        
+
         // Test case 1: Only brackets are unbalanced (bracket_count < 0, brace_count = 0)
         // Should fail with || (detects bracket problem) ✓
         // Would pass with && (both not negative) ✗
-        let malformed_json1 = "]";  // Closing bracket without opening
+        let malformed_json1 = "]"; // Closing bracket without opening
         let result = GetInstrumentsTool::validate_json_array_structure(malformed_json1);
         assert!(result.is_err(), "Should detect unbalanced brackets");
-        
+
         // Test case 2: Only braces are unbalanced (brace_count < 0, bracket_count = 0)
         // Should fail with || (detects brace problem) ✓
         // Would pass with && (both not negative) ✗
-        let malformed_json2 = "}";  // Closing brace without opening
+        let malformed_json2 = "}"; // Closing brace without opening
         let result = GetInstrumentsTool::validate_json_array_structure(malformed_json2);
         assert!(result.is_err(), "Should detect unbalanced braces");
-        
+
         // Test case 3: Both are unbalanced (both < 0)
         // Should fail with both || and && (both detect the problem) ✓
-        let malformed_json3 = "]}";  // Both closing without opening
+        let malformed_json3 = "]}"; // Both closing without opening
         let result = GetInstrumentsTool::validate_json_array_structure(malformed_json3);
-        assert!(result.is_err(), "Should detect both unbalanced brackets and braces");
-        
+        assert!(
+            result.is_err(),
+            "Should detect both unbalanced brackets and braces"
+        );
+
         // Test case 4: Valid JSON structure
         let valid_json = "[]";
         let result = GetInstrumentsTool::validate_json_array_structure(valid_json);
@@ -2432,61 +2448,70 @@ mod tests {
     #[test]
     fn test_should_use_streaming_mutations() {
         // Tests that specifically target the == vs != mutations in should_use_streaming
-        
+
         // MUTATION: Line 481 - self.page.unwrap_or(1) == 1 vs self.page.unwrap_or(1) != 1
-        // The logic determines if a search query should use standard (fast cache lookup) 
+        // The logic determines if a search query should use standard (fast cache lookup)
         // or streaming (memory efficient) approach
-        
+
         // tiny_specific_search = search.is_some() && limit <= 3 && type.is_none() && page == 1
         // should_use_streaming = !tiny_specific_search
-        
+
         // Test case 1: page=1 with tiny search parameters
         // Correct: page == 1 is true, so tiny_specific_search = true, should_use_streaming = false ✓
         // Mutated:  page != 1 is false, so tiny_specific_search = false, should_use_streaming = true ✗
         let tool = GetInstrumentsTool {
-            search: Some("AAPL".to_string()),  // search.is_some() = true
-            instrument_type: None,             // instrument_type.is_none() = true  
-            limit: Some(2),                    // limit <= 3 = true
-            page: Some(1),                     // page == 1 = true (this is what gets mutated)
+            search: Some("AAPL".to_string()), // search.is_some() = true
+            instrument_type: None,            // instrument_type.is_none() = true
+            limit: Some(2),                   // limit <= 3 = true
+            page: Some(1),                    // page == 1 = true (this is what gets mutated)
         };
-        
+
         let uses_streaming = tool.should_use_streaming();
-        assert!(!uses_streaming, "Tiny specific search on page 1 should use standard approach");
-        
+        assert!(
+            !uses_streaming,
+            "Tiny specific search on page 1 should use standard approach"
+        );
+
         // Test case 2: page=2 with same tiny search parameters
         // Correct: page == 1 is false, so tiny_specific_search = false, should_use_streaming = true ✓
         // Mutated:  page != 1 is true, so tiny_specific_search = true, should_use_streaming = false ✗
         let tool = GetInstrumentsTool {
-            search: Some("AAPL".to_string()),  // search.is_some() = true
-            instrument_type: None,             // instrument_type.is_none() = true
-            limit: Some(2),                    // limit <= 3 = true  
-            page: Some(2),                     // page == 1 = false (key difference)
+            search: Some("AAPL".to_string()), // search.is_some() = true
+            instrument_type: None,            // instrument_type.is_none() = true
+            limit: Some(2),                   // limit <= 3 = true
+            page: Some(2),                    // page == 1 = false (key difference)
         };
-        
+
         let uses_streaming = tool.should_use_streaming();
-        assert!(uses_streaming, "Tiny search on page 2 should use streaming approach");
-        
-        // Test case 3: page=None (defaults to 1) with tiny search parameters  
+        assert!(
+            uses_streaming,
+            "Tiny search on page 2 should use streaming approach"
+        );
+
+        // Test case 3: page=None (defaults to 1) with tiny search parameters
         // Correct: page.unwrap_or(1) == 1 is true, so tiny_specific_search = true, should_use_streaming = false ✓
         // Mutated:  page.unwrap_or(1) != 1 is false, so tiny_specific_search = false, should_use_streaming = true ✗
         let tool = GetInstrumentsTool {
-            search: Some("AAPL".to_string()),  // search.is_some() = true
-            instrument_type: None,             // instrument_type.is_none() = true
-            limit: Some(3),                    // limit <= 3 = true
-            page: None,                        // page.unwrap_or(1) = 1
+            search: Some("AAPL".to_string()), // search.is_some() = true
+            instrument_type: None,            // instrument_type.is_none() = true
+            limit: Some(3),                   // limit <= 3 = true
+            page: None,                       // page.unwrap_or(1) = 1
         };
-        
+
         let uses_streaming = tool.should_use_streaming();
-        assert!(!uses_streaming, "Tiny specific search with default page should use standard approach");
-        
+        assert!(
+            !uses_streaming,
+            "Tiny specific search with default page should use standard approach"
+        );
+
         // Test case 4: Large search that should always use streaming regardless of page
         let tool = GetInstrumentsTool {
             search: Some("Apple".to_string()),
             instrument_type: None,
-            limit: Some(100),                  // limit > 3, so tiny_specific_search = false
+            limit: Some(100), // limit > 3, so tiny_specific_search = false
             page: Some(1),
         };
-        
+
         let uses_streaming = tool.should_use_streaming();
         assert!(uses_streaming, "Large search should always use streaming");
     }
