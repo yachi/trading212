@@ -384,6 +384,58 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_home_directory_path() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", ""); // Empty home directory
+
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid HOME directory path"));
+    }
+
+    #[test]
+    fn test_relative_home_directory_path() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", "home/user"); // Relative path without leading /
+
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid HOME directory path"));
+    }
+
+    #[test]
+    fn test_home_directory_with_parent_traversal() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", "/home/user/../etc"); // Absolute path but contains ".."
+
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid HOME directory path"));
+    }
+
+    #[test]
+    fn test_home_directory_relative_with_parent_traversal() {
+        let mut mock_env = MockEnvProvider::new();
+        mock_env.set("HOME", "home/../etc"); // Relative path with ".." - should fail validation
+
+        let result = Trading212Config::load_api_key_with_env(&mock_env);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid HOME directory path"));
+    }
+
+    #[test]
     fn test_invalid_base_url() {
         let temp_dir = TempDir::new().unwrap();
         let api_key_path = temp_dir.path().join(".trading212-api-key");
