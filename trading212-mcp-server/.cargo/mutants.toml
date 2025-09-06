@@ -30,8 +30,8 @@ exclude_re = [
     "impl Display",
     # Skip Drop implementations (often for cleanup)
     "impl Drop",
-    # Skip error construction that's hard to test
-    "Trading212Error::",
+    # Skip error construction that's hard to test (Display, Debug)
+    "fn fmt.*Trading212Error",
     # Skip tracing/logging lines
     "tracing::",
 ]
@@ -44,11 +44,7 @@ skip_calls = [
     "dbg",           # Skip debug macro
 ]
 
-# Custom error values to inject (removed due to configuration issue)
-# error_values = [
-#     "Trading212Error::parse_error(\"mutated!\")",
-#     "Trading212Error::config_error(\"mutated!\")",
-# ]
+# Custom error values to inject (removed due to baseline test conflicts)
 
 # Test command options
 test_tool = "cargo"
