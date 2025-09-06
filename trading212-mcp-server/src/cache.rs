@@ -632,4 +632,47 @@ mod tests {
         // Test that paths without "pies/" are not affected by slash count
         assert_eq!(EndpointType::from_path("a/b/c/d/e"), EndpointType::Unknown);
     }
+
+    #[test]
+    fn test_endpoint_type_logical_operator_mutations() {
+        // Test cases specifically designed to catch && vs || mutations
+        // and >= vs != mutations in EndpointType::from_path
+
+        // Case 1: Tests && vs || mutation
+        // Path has "pies/" but only 1 slash (count < 2)
+        // Correct: false && false = false (should be PiesList)
+        // Mutated: false || false = false (still works)
+        // But: Path "pies/" with 1 slash should be PiesList, not PieDetail
+        assert_eq!(EndpointType::from_path("pies/"), EndpointType::PiesList);
+
+        // Case 2: Path has >= 2 slashes but no "pies/"
+        // Correct: false && true = false (should be Unknown)
+        // Mutated: false || true = true (would incorrectly return PieDetail)
+        assert_eq!(
+            EndpointType::from_path("api/equity/balance"),
+            EndpointType::Unknown
+        );
+
+        // Case 3: Tests >= vs != mutation for slash counting
+        // Path with exactly 2 slashes and "pies/"
+        // Correct: count >= 2 is true (should be PieDetail)
+        // Mutated: count != 2 is false (would incorrectly return PiesList)
+        assert_eq!(
+            EndpointType::from_path("equity/pies/123"),
+            EndpointType::PieDetail
+        );
+
+        // Case 4: Path with exactly 1 slash and "pies/"
+        // Correct: count >= 2 is false (should be PiesList)
+        // Mutated: count != 2 is true (would incorrectly return PieDetail)
+        assert_eq!(EndpointType::from_path("pies/test"), EndpointType::PiesList);
+
+        // Case 5: Path with more than 2 slashes and "pies/"
+        // Both >= 2 and != 2 should be true, so behavior same
+        // This confirms the PieDetail logic works for > 2 slashes
+        assert_eq!(
+            EndpointType::from_path("api/equity/pies/123"),
+            EndpointType::PieDetail
+        );
+    }
 }
