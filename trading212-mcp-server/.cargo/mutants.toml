@@ -1,0 +1,63 @@
+# Mutation testing configuration for cargo-mutants
+# https://mutants.rs/
+
+# Timeout multiplier for mutations (default is 5.0)
+timeout_multiplier = 2.0
+
+# Minimum test timeout in seconds
+minimum_test_timeout = 10
+
+# Build timeout multiplier
+build_timeout_multiplier = 2.0
+
+# Additional cargo arguments
+additional_cargo_args = ["--all-features"]
+
+# Use release profile for faster execution
+# profile = "release"  # Uncomment for faster runs
+
+# Exclude certain paths from mutation testing
+exclude_globs = [
+    "tests/**",      # Integration tests
+    "benches/**",    # Benchmarks
+    "examples/**",   # Example code
+]
+
+# Exclude specific patterns using regex
+exclude_re = [
+    # Skip Debug and Display implementations
+    "impl Debug",
+    "impl Display",
+    # Skip Drop implementations (often for cleanup)
+    "impl Drop",
+    # Skip error construction that's hard to test
+    "Trading212Error::",
+    # Skip tracing/logging lines
+    "tracing::",
+]
+
+# Skip certain function calls from mutation
+skip_calls = [
+    "tracing::*",    # Skip tracing/logging calls
+    "println",       # Skip debug output
+    "eprintln",      # Skip error output
+    "dbg",           # Skip debug macro
+]
+
+# Custom error values to inject
+error_values = [
+    "Trading212Error::parse_error(\"mutated!\")",
+    "Trading212Error::config_error(\"mutated!\")",
+]
+
+# Test command options
+test_tool = "cargo"
+
+# Output directory
+output = "mutants.out"
+
+# Copy version control files (if tests need .git)
+copy_vcs = false
+
+# Respect gitignore when copying files
+gitignore = true

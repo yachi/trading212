@@ -139,5 +139,34 @@ script = [
     "cargo install cargo-audit",
     "cargo install cargo-machete",
     "cargo install cargo-llvm-cov",
-    "cargo install cargo-make"
+    "cargo install cargo-make",
+    "cargo install cargo-mutants"
+]
+
+# Mutation testing tasks
+[tasks.mutants]
+description = "Run mutation testing to verify test quality"
+command = "cargo"
+args = ["mutants"]
+
+[tasks.mutants-quick]
+description = "Run quick mutation testing (timeout 10s per mutation)"
+command = "cargo"
+args = ["mutants", "--timeout", "10"]
+
+[tasks.mutants-report]
+description = "Run mutation testing and generate detailed report"
+command = "cargo"
+args = ["mutants", "--output", "mutants.out", "--colors", "true"]
+
+[tasks.mutants-file]
+description = "Run mutation testing on a specific file"
+command = "cargo"
+args = ["mutants", "--file", "${FILE:-src/tools.rs}"]
+
+[tasks.mutants-clean]
+description = "Clean mutation testing output"
+script = [
+    "rm -rf mutants.out",
+    "rm -rf mutants.out.old"
 ]
