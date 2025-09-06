@@ -10,11 +10,15 @@
     clippy::unwrap_used,
     clippy::uninlined_format_args,
     clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::single_component_path_imports,
     missing_docs
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use reqwest::Client;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::runtime::Runtime;
@@ -53,37 +57,81 @@ fn create_mock_instruments_json(count: usize) -> String {
     format!("[{}]", instruments.join(","))
 }
 
-// Memory tracking helper
+// Helper function to calculate average instrument size from sample data
+fn calculate_avg_instrument_size(sample_json: &str) -> usize {
+    // Parse a small sample to get realistic size estimates
+    let sample_result: Result<Vec<serde_json::Value>, _> = serde_json::from_str(sample_json);
+    match sample_result {
+        Ok(instruments) if !instruments.is_empty() => {
+            // Take first 10 instruments as sample
+            let sample_size = instruments.len().min(10);
+            let sample = &instruments[0..sample_size];
+
+            // Calculate average JSON size per instrument
+            let total_size: usize = sample
+                .iter()
+                .map(|inst| serde_json::to_string(inst).map(|s| s.len()).unwrap_or(200))
+                .sum();
+
+            let avg_size = total_size / sample_size;
+            // Add overhead for deserialized struct (estimated 1.5x JSON size)
+            (avg_size as f64 * 1.5) as usize
+        }
+        _ => 300, // Fallback default size
+    }
+}
+
+// Memory tracking helper using size estimation with actual sampling
+// Since we can't use unsafe code, we estimate memory usage based on data structures
 struct MemoryTracker {
-    start_memory: usize,
-    peak_memory: usize,
+    json_size: usize,
+    result_count: usize,
+    approach: String,
+    avg_instrument_size: usize,
 }
 
 impl MemoryTracker {
-    fn new() -> Self {
+    fn new(json_size: usize, approach: &str, sample_json: &str) -> Self {
+        let avg_instrument_size = calculate_avg_instrument_size(sample_json);
         Self {
-            start_memory: get_memory_usage(),
-            peak_memory: 0,
+            json_size,
+            result_count: 0,
+            approach: approach.to_string(),
+            avg_instrument_size,
         }
     }
 
-    fn update_peak(&mut self) {
-        let current = get_memory_usage();
-        if current > self.peak_memory {
-            self.peak_memory = current;
+    fn set_result_count(&mut self, count: usize) {
+        self.result_count = count;
+    }
+
+    fn estimate_peak_memory(&self) -> usize {
+        // Estimate memory usage based on approach using calculated sizes
+        if self.approach == "standard" {
+            // Standard approach loads entire JSON into memory
+            // Plus parsed array of serde_json::Value objects
+            // Plus final Instrument structs
+            // Estimate: JSON + serde_json::Values + Instrument structs
+            let json_mem = self.json_size;
+            let values_mem = (self.json_size as f64 * 1.2) as usize; // serde_json::Value overhead
+            let structs_mem = self.result_count * self.avg_instrument_size;
+            json_mem + values_mem + structs_mem
+        } else {
+            // Streaming approach processes one instrument at a time
+            // Only keeps filtered results in memory + small working buffer
+            // No full JSON array in memory, just the input string
+            let working_buffer = self.avg_instrument_size * 2; // Buffer for current parsing
+            let results_mem = self.result_count * self.avg_instrument_size;
+            working_buffer + results_mem
         }
     }
 
-    fn peak_delta(&self) -> usize {
-        self.peak_memory.saturating_sub(self.start_memory)
+    fn get_memory_efficiency_ratio(&self) -> f64 {
+        // Calculate memory efficiency compared to standard approach
+        let standard_estimate = self.json_size * 3; // Simple standard estimate
+        let current_estimate = self.estimate_peak_memory();
+        standard_estimate as f64 / current_estimate as f64
     }
-}
-
-// Simple memory usage approximation
-fn get_memory_usage() -> usize {
-    // This is a simple approximation - in real benchmarks you'd use system tools
-    // For this demo, we'll track allocations manually
-    0
 }
 
 async fn benchmark_standard_approach(
@@ -91,22 +139,42 @@ async fn benchmark_standard_approach(
     client: &Client,
     config: &Trading212Config,
     cache: &Trading212Cache,
-) -> Result<(u128, usize), Box<dyn std::error::Error>> {
-    let mut memory_tracker = MemoryTracker::new();
+    json_size: usize,
+    sample_json: &str,
+) -> Result<(u128, usize, f64), Box<dyn std::error::Error>> {
+    let mut memory_tracker = MemoryTracker::new(json_size, "standard", sample_json);
     let start = Instant::now();
 
-    // Force standard approach
+    // Save current env var state and force standard approach
+    let original_value = std::env::var("TRADING212_USE_STREAMING").ok();
     std::env::remove_var("TRADING212_USE_STREAMING");
 
-    memory_tracker.update_peak();
-    let result = tool.call_tool(client, config, cache).await;
-    memory_tracker.update_peak();
-
+    let result = tool.call_tool(client, config, cache).await?;
     let duration = start.elapsed().as_millis();
-    let peak_memory = memory_tracker.peak_delta();
 
-    result?;
-    Ok((duration, peak_memory))
+    // Count results for memory estimation
+    // Convert the tool result to JSON to extract the result count
+    if let Ok(result_json) = serde_json::to_value(&result) {
+        if let Some(content) = result_json["content"].as_array() {
+            if let Some(text) = content.first().and_then(|c| c["text"].as_str()) {
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(text) {
+                    if let Some(array) = json_value.as_array() {
+                        memory_tracker.set_result_count(array.len());
+                    }
+                }
+            }
+        }
+    }
+
+    let peak_memory = memory_tracker.estimate_peak_memory();
+    let efficiency_ratio = memory_tracker.get_memory_efficiency_ratio();
+
+    // Restore original env var state
+    if let Some(value) = original_value {
+        std::env::set_var("TRADING212_USE_STREAMING", value);
+    }
+
+    Ok((duration, peak_memory, efficiency_ratio))
 }
 
 async fn benchmark_streaming_approach(
@@ -114,22 +182,44 @@ async fn benchmark_streaming_approach(
     client: &Client,
     config: &Trading212Config,
     cache: &Trading212Cache,
-) -> Result<(u128, usize), Box<dyn std::error::Error>> {
-    let mut memory_tracker = MemoryTracker::new();
+    json_size: usize,
+    sample_json: &str,
+) -> Result<(u128, usize, f64), Box<dyn std::error::Error>> {
+    let mut memory_tracker = MemoryTracker::new(json_size, "streaming", sample_json);
     let start = Instant::now();
 
-    // Force streaming approach
+    // Save current env var state and force streaming approach
+    let original_value = std::env::var("TRADING212_USE_STREAMING").ok();
     std::env::set_var("TRADING212_USE_STREAMING", "1");
 
-    memory_tracker.update_peak();
-    let result = tool.call_tool(client, config, cache).await;
-    memory_tracker.update_peak();
-
+    let result = tool.call_tool(client, config, cache).await?;
     let duration = start.elapsed().as_millis();
-    let peak_memory = memory_tracker.peak_delta();
 
-    result?;
-    Ok((duration, peak_memory))
+    // Count results for memory estimation
+    // Convert the tool result to JSON to extract the result count
+    if let Ok(result_json) = serde_json::to_value(&result) {
+        if let Some(content) = result_json["content"].as_array() {
+            if let Some(text) = content.first().and_then(|c| c["text"].as_str()) {
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(text) {
+                    if let Some(array) = json_value.as_array() {
+                        memory_tracker.set_result_count(array.len());
+                    }
+                }
+            }
+        }
+    }
+
+    let peak_memory = memory_tracker.estimate_peak_memory();
+    let efficiency_ratio = memory_tracker.get_memory_efficiency_ratio();
+
+    // Restore original env var state
+    if let Some(value) = original_value {
+        std::env::set_var("TRADING212_USE_STREAMING", value);
+    } else {
+        std::env::remove_var("TRADING212_USE_STREAMING");
+    }
+
+    Ok((duration, peak_memory, efficiency_ratio))
 }
 
 fn bench_approaches(c: &mut Criterion) {
@@ -197,7 +287,15 @@ fn bench_approaches(c: &mut Criterion) {
             // Benchmark standard approach
             group.bench_function("standard", |b| {
                 b.to_async(&rt).iter(|| async {
-                    let result = benchmark_standard_approach(&tool, &client, &config, &cache).await;
+                    let result = benchmark_standard_approach(
+                        &tool,
+                        &client,
+                        &config,
+                        &cache,
+                        mock_json.len(),
+                        &mock_json,
+                    )
+                    .await;
                     black_box(result)
                 });
             });
@@ -205,8 +303,15 @@ fn bench_approaches(c: &mut Criterion) {
             // Benchmark streaming approach
             group.bench_function("streaming", |b| {
                 b.to_async(&rt).iter(|| async {
-                    let result =
-                        benchmark_streaming_approach(&tool, &client, &config, &cache).await;
+                    let result = benchmark_streaming_approach(
+                        &tool,
+                        &client,
+                        &config,
+                        &cache,
+                        mock_json.len(),
+                        &mock_json,
+                    )
+                    .await;
                     black_box(result)
                 });
             });

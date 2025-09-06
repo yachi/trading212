@@ -37,7 +37,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
 reqwest = { version = "0.12.22", features = ["json"] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 rust-mcp-sdk = { version = "0.5.0", features = ["client", "server", "macros"] }
 async-trait = "0.1.88"
 moka = { version = "0.12.10", features = ["future"] }
@@ -47,7 +47,7 @@ uuid = { version = "1.18.1", features = ["v4", "serde"] }
 [dev-dependencies]
 tempfile = "3.20.0"
 wiremock = "0.6.4"
-criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+criterion = { version = "0.7.0", features = ["html_reports", "async_tokio"] }
 
 [[bench]]
 name = "memory_benchmark"

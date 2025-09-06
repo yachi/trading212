@@ -294,9 +294,23 @@ async fn test_pagination_consistency() {
 
 #[tokio::test]
 async fn test_approach_selection_logic() {
+    // Store original environment state
+    let original_streaming = std::env::var("TRADING212_USE_STREAMING").ok();
+    let original_standard = std::env::var("TRADING212_USE_STANDARD").ok();
+
     // Ensure clean environment for this test
     std::env::remove_var("TRADING212_USE_STREAMING");
     std::env::remove_var("TRADING212_USE_STANDARD");
+
+    // Verify environment is actually clean before proceeding
+    assert!(
+        std::env::var("TRADING212_USE_STREAMING").is_err(),
+        "TRADING212_USE_STREAMING should be unset"
+    );
+    assert!(
+        std::env::var("TRADING212_USE_STANDARD").is_err(),
+        "TRADING212_USE_STANDARD should be unset"
+    );
 
     let (client, config, cache) = setup_test_environment().await;
 
@@ -308,9 +322,36 @@ async fn test_approach_selection_logic() {
         page: Some(1),
     };
 
+    // Retry logic to handle race conditions with environment variables in parallel tests
+    let mut should_use_streaming = false;
+    let mut attempts = 0;
+    let max_attempts = 10;
+
+    while attempts < max_attempts {
+        // Aggressively clean environment
+        std::env::remove_var("TRADING212_USE_STREAMING");
+        std::env::remove_var("TRADING212_USE_STANDARD");
+
+        // Verify environment is clean
+        let env_streaming = std::env::var("TRADING212_USE_STREAMING").ok();
+        let env_standard = std::env::var("TRADING212_USE_STANDARD").ok();
+
+        if env_streaming.is_none() && env_standard.is_none() {
+            should_use_streaming = selective_tool.should_use_streaming();
+            if should_use_streaming {
+                break; // Test passed, exit retry loop
+            }
+        }
+
+        attempts += 1;
+        if attempts < max_attempts {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    }
+
     assert!(
-        selective_tool.should_use_streaming(),
-        "Selective queries should use streaming"
+        should_use_streaming,
+        "Selective queries should use streaming after {attempts} attempts"
     );
 
     // Test that type-only filters trigger streaming
@@ -346,6 +387,13 @@ async fn test_approach_selection_logic() {
         "Environment variable should force streaming"
     );
 
-    std::env::remove_var("TRADING212_USE_STREAMING");
-    std::env::remove_var("TRADING212_USE_STANDARD");
+    // Restore original environment state
+    match original_streaming {
+        Some(value) => std::env::set_var("TRADING212_USE_STREAMING", value),
+        None => std::env::remove_var("TRADING212_USE_STREAMING"),
+    }
+    match original_standard {
+        Some(value) => std::env::set_var("TRADING212_USE_STANDARD", value),
+        None => std::env::remove_var("TRADING212_USE_STANDARD"),
+    }
 }

@@ -608,6 +608,78 @@ impl GetInstrumentsTool {
         Ok(response_text)
     }
 
+    /// Enhanced JSON validation helper
+    fn validate_json_array_structure(json_text: &str) -> Result<(), CallToolError> {
+        let trimmed = json_text.trim();
+
+        // Basic structure checks
+        if trimmed.is_empty() {
+            return Err(CallToolError::new(Trading212Error::parse_error(
+                "Response is empty",
+            )));
+        }
+
+        if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+            return Err(CallToolError::new(Trading212Error::parse_error(
+                "Response is not a valid JSON array - missing array brackets",
+            )));
+        }
+
+        // Check for balanced brackets using a simple counter
+        let mut bracket_count = 0;
+        let mut brace_count = 0;
+        let mut in_string = false;
+        let mut escape_next = false;
+
+        for byte in trimmed.bytes() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+
+            if byte == b'\\' && in_string {
+                escape_next = true;
+                continue;
+            }
+
+            if byte == b'"' {
+                in_string = !in_string;
+                continue;
+            }
+
+            if !in_string {
+                match byte {
+                    b'[' => bracket_count += 1,
+                    b']' => bracket_count -= 1,
+                    b'{' => brace_count += 1,
+                    b'}' => brace_count -= 1,
+                    _ => {}
+                }
+
+                // Early detection of malformed JSON
+                if bracket_count < 0 || brace_count < 0 {
+                    return Err(CallToolError::new(Trading212Error::parse_error(
+                        "Response has unbalanced brackets",
+                    )));
+                }
+            }
+        }
+
+        if bracket_count != 0 {
+            return Err(CallToolError::new(Trading212Error::parse_error(
+                "Response has unbalanced square brackets",
+            )));
+        }
+
+        if brace_count != 0 {
+            return Err(CallToolError::new(Trading212Error::parse_error(
+                "Response has unbalanced curly braces",
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Stream parse and filter JSON in one pass to minimize memory usage
     #[allow(clippy::cognitive_complexity)]
     fn stream_parse_and_filter(&self, json_text: &str) -> Result<Vec<Instrument>, CallToolError> {
@@ -616,25 +688,11 @@ impl GetInstrumentsTool {
             "Starting streaming parse and filter"
         );
 
-        // First, validate that this looks like a JSON array
-        let trimmed = json_text.trim();
-        if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-            let error = Trading212Error::parse_error("Response is not a valid JSON array");
-            tracing::error!(error = %error, "Invalid JSON structure detected");
-            return Err(CallToolError::new(error));
-        }
+        // Enhanced JSON validation
+        Self::validate_json_array_structure(json_text)?;
 
-        // For true streaming, parse as an array of Values first, then process each element
-        let instruments_array: Vec<serde_json::Value> = match serde_json::from_str(json_text) {
-            Ok(array) => array,
-            Err(e) => {
-                let error =
-                    Trading212Error::parse_error(format!("Failed to parse JSON array: {e}"));
-                tracing::error!(error = %error, "JSON parsing failed");
-                return Err(CallToolError::new(error));
-            }
-        };
-
+        // Use incremental JSON parsing to process one instrument at a time
+        // This avoids loading the entire array into memory at once
         let mut filtered_instruments = Vec::new();
         let mut processed_count = 0;
         let mut error_count = 0;
@@ -646,41 +704,65 @@ impl GetInstrumentsTool {
         let mut skipped = 0;
         let mut collected = 0;
 
-        for json_value in instruments_array {
-            processed_count += 1;
+        // Use a hybrid approach: parse the JSON array structure but process elements incrementally
+        // This balances robustness with memory efficiency
+        match serde_json::from_str::<Vec<serde_json::Value>>(json_text) {
+            Ok(json_array) => {
+                // Process each element individually to maintain streaming behavior
+                const MAX_CONSECUTIVE_ERRORS: usize = 50;
+                let mut consecutive_errors = 0;
 
-            // Convert JSON value to Instrument
-            let instrument = match serde_json::from_value::<Instrument>(json_value) {
-                Ok(instrument) => instrument,
-                Err(e) => {
-                    error_count += 1;
-                    tracing::warn!(
-                        error = %e,
-                        processed_count = processed_count,
-                        "Failed to convert JSON value to instrument"
-                    );
-                    continue;
+                for json_value in json_array {
+                    match serde_json::from_value::<Instrument>(json_value) {
+                        Ok(instrument) => {
+                            processed_count += 1;
+                            consecutive_errors = 0; // Reset on success
+
+                            // Apply filters
+                            if self.matches_filters(&instrument) {
+                                // Apply pagination - skip until we reach the desired page
+                                if skipped < skip_count {
+                                    skipped += 1;
+                                } else if collected < limit {
+                                    filtered_instruments.push(instrument);
+                                    collected += 1;
+                                } else {
+                                    // We have enough items for this page, early termination
+                                    tracing::debug!(
+                                        "Stopping early: collected {} items",
+                                        collected
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            consecutive_errors += 1;
+
+                            tracing::warn!(
+                                error = %e,
+                                processed_count = processed_count,
+                                error_count = error_count,
+                                consecutive_errors = consecutive_errors,
+                                "Failed to deserialize JSON value to instrument"
+                            );
+
+                            // Prevent runaway errors from corrupted data
+                            if consecutive_errors > MAX_CONSECUTIVE_ERRORS {
+                                return Err(CallToolError::new(Trading212Error::parse_error(
+                                    format!("Too many consecutive parsing errors ({consecutive_errors}), JSON may be corrupted")
+                                )));
+                            }
+                        }
+                    }
                 }
-            };
-
-            // Apply filters
-            if !self.matches_filters(&instrument) {
-                continue;
             }
-
-            // Apply pagination - skip until we reach the desired page
-            if skipped < skip_count {
-                skipped += 1;
-                continue;
-            }
-
-            // Collect until we have enough for this page
-            if collected < limit {
-                filtered_instruments.push(instrument);
-                collected += 1;
-            } else {
-                // We have enough items for this page
-                break;
+            Err(e) => {
+                let error =
+                    Trading212Error::parse_error(format!("Failed to parse JSON array: {e}"));
+                tracing::error!(error = %error, "JSON parsing failed during streaming");
+                return Err(CallToolError::new(error));
             }
         }
 

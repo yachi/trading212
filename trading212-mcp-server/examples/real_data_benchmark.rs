@@ -19,22 +19,70 @@ use trading212_mcp_server::cache::Trading212Cache;
 use trading212_mcp_server::config::Trading212Config;
 use trading212_mcp_server::tools::GetInstrumentsTool;
 
+/// Create mock Trading212 data for testing when real fixtures aren't available
+fn create_mock_trading212_data() -> String {
+    serde_json::to_string_pretty(&serde_json::json!([
+        {
+            "ticker": "AAPL_US_EQ",
+            "type": "STOCK",
+            "workingScheduleId": 1,
+            "isin": "US0378331005",
+            "currencyCode": "USD",
+            "name": "Apple Inc.",
+            "shortName": "Apple",
+            "maxOpenQuantity": 10000.0,
+            "addedOn": "2020-01-01"
+        },
+        {
+            "ticker": "GOOGL_US_EQ",
+            "type": "STOCK",
+            "workingScheduleId": 1,
+            "isin": "US02079K3059",
+            "currencyCode": "USD",
+            "name": "Alphabet Inc. Class A",
+            "shortName": "Alphabet A",
+            "maxOpenQuantity": 5000.0,
+            "addedOn": "2020-01-01"
+        },
+        {
+            "ticker": "MSFT_US_EQ",
+            "type": "STOCK",
+            "workingScheduleId": 1,
+            "isin": "US5949181045",
+            "currencyCode": "USD",
+            "name": "Microsoft Corporation",
+            "shortName": "Microsoft",
+            "maxOpenQuantity": 8000.0,
+            "addedOn": "2020-01-01"
+        }
+    ]))
+    .unwrap_or_else(|_| "[]".to_string())
+}
+
 async fn setup_real_data_env(
 ) -> Result<(Client, Trading212Config, Trading212Cache, String), Box<dyn std::error::Error>> {
-    // Load real Trading212 data
-    let real_data = fs::read_to_string("fixtures/real_instruments.json")?;
-    println!(
-        "📄 Loaded real Trading212 data: {:.2} MB, {} instruments",
-        real_data.len() as f64 / 1_048_576.0,
-        real_data.matches("\"ticker\"").count()
+    // Load real Trading212 data or use mock data if file doesn't exist
+    let real_data = fs::read_to_string("fixtures/real_instruments.json").map_or_else(
+        |_| {
+            println!("📄 Using mock data (fixtures/real_instruments.json not found)");
+            create_mock_trading212_data()
+        },
+        |data| {
+            println!(
+                "📄 Loaded real Trading212 data: {:.2} MB, {} instruments",
+                data.len() as f64 / 1_048_576.0,
+                data.matches("\"ticker\"").count()
+            );
+            data
+        },
     );
 
     // Set up test environment
     std::env::set_var("TRADING212_API_KEY", "real_test_key");
 
     let client = Client::new();
-    let config = Trading212Config::new().unwrap();
-    let cache = Trading212Cache::new().unwrap();
+    let config = Trading212Config::new().map_err(|e| format!("Failed to create config: {}", e))?;
+    let cache = Trading212Cache::new().map_err(|e| format!("Failed to create cache: {}", e))?;
 
     // Pre-populate cache with real data
     let cache_key = trading212_mcp_server::cache::CacheKey::new("equity/metadata/instruments", "");
@@ -108,8 +156,8 @@ async fn run_benchmark(
         let std_avg: f64 = std_times.iter().sum::<f64>() / std_times.len() as f64;
         let stream_avg: f64 = stream_times.iter().sum::<f64>() / stream_times.len() as f64;
 
-        std_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        stream_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        std_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        stream_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let std_median = std_times[std_times.len() / 2];
         let stream_median = stream_times[stream_times.len() / 2];
