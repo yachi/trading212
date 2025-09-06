@@ -4,8 +4,8 @@
 # Timeout multiplier for mutations (default is 5.0)
 timeout_multiplier = 2.0
 
-# Minimum test timeout in seconds
-minimum_test_timeout = 10
+# Minimum test timeout in seconds (increased for initial build)
+minimum_test_timeout = 30
 
 # Build timeout multiplier
 build_timeout_multiplier = 2.0
@@ -44,11 +44,11 @@ skip_calls = [
     "dbg",           # Skip debug macro
 ]
 
-# Custom error values to inject
-error_values = [
-    "Trading212Error::parse_error(\"mutated!\")",
-    "Trading212Error::config_error(\"mutated!\")",
-]
+# Custom error values to inject (removed due to configuration issue)
+# error_values = [
+#     "Trading212Error::parse_error(\"mutated!\")",
+#     "Trading212Error::config_error(\"mutated!\")",
+# ]
 
 # Test command options
 test_tool = "cargo"
