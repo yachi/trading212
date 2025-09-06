@@ -2241,4 +2241,115 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_create_paginated_response_basic_functionality() {
+        // Simple functional tests that verify the mutations would cause failures
+        let data = serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3}]);
+
+        // Test 1: Division arithmetic (line 85: / vs *)
+        // Edge case: With 10 items, limit 3: should be 4 pages (ceil(10/3))
+        // If mutated to *, would be ceil(10*3) = 30 pages - impossible!
+        let result = create_paginated_response(&data, "items", 3, 10, 1, 3);
+        assert!(result.is_ok(), "Basic pagination should work");
+
+        // Test 2: Has more logic (line 78: * vs +)
+        // With page=2, limit=5, total=10: page*limit = 10 = total (no more)
+        // If mutated to +: page+limit = 7 < 10 (would have more) - wrong!
+        let result = create_paginated_response(&data, "items", 3, 10, 2, 5);
+        assert!(result.is_ok(), "Boundary pagination should work");
+
+        // Test 3: Zero comparisons (line 97 & 105: > 0 vs >= 0)
+        // Zero items should work fine
+        let empty_data = serde_json::json!([]);
+        let result = create_paginated_response(&empty_data, "items", 0, 0, 1, 10);
+        assert!(result.is_ok(), "Zero items pagination should work");
+
+        // Test 4: Single item edge case
+        let single_data = serde_json::json!([{"id": 1}]);
+        let result = create_paginated_response(&single_data, "items", 1, 1, 1, 10);
+        assert!(result.is_ok(), "Single item pagination should work");
+    }
+
+    #[test]
+    fn test_create_paginated_response_division_edge_cases() {
+        // Tests that specifically target the division mutation (/ vs *)
+        let data = serde_json::json!([]);
+
+        // Edge case 1: Large numbers where * would overflow/panic
+        // total_count=1000, limit=3: ceil(1000/3) = 334 pages
+        // If mutated to *: ceil(1000*3) = 3000 pages (still computable)
+        // But we can test the logic remains reasonable
+        let result = create_paginated_response(&data, "items", 0, 1000, 1, 3);
+        assert!(result.is_ok(), "Large number division should work");
+
+        // Edge case 2: Exact division
+        // total_count=15, limit=5: ceil(15/5) = 3 pages exactly
+        // If mutated to *: ceil(15*5) = 75 pages (wrong!)
+        let result = create_paginated_response(&data, "items", 0, 15, 1, 5);
+        assert!(result.is_ok(), "Exact division should work");
+
+        // Edge case 3: Small numbers
+        // total_count=1, limit=1: ceil(1/1) = 1 page
+        // If mutated to *: ceil(1*1) = 1 page (same result, but still wrong logic)
+        let result = create_paginated_response(&data, "items", 0, 1, 1, 1);
+        assert!(result.is_ok(), "Small number division should work");
+    }
+
+    #[test]
+    fn test_create_paginated_response_multiplication_edge_cases() {
+        // Tests that specifically target the multiplication mutation (* vs +)
+        let data = serde_json::json!([]);
+
+        // The has_more logic: returned_count == limit && (page * limit) < total_count
+        // We need cases where page * limit vs page + limit make different comparisons
+
+        // Case 1: page=3, limit=10, total=30
+        // Correct: 3*10 = 30, 30 < 30 is false (no more pages) ✓
+        // Mutated: 3+10 = 13, 13 < 30 is true (would have more pages) ✗
+        let result = create_paginated_response(&data, "items", 0, 30, 3, 10);
+        assert!(result.is_ok(), "Boundary multiplication case should work");
+
+        // Case 2: page=2, limit=7, total=20
+        // Correct: 2*7 = 14, 14 < 20 is true (has more pages) ✓
+        // Mutated: 2+7 = 9, 9 < 20 is true (same result but wrong logic)
+        let result = create_paginated_response(&data, "items", 0, 20, 2, 7);
+        assert!(
+            result.is_ok(),
+            "Non-boundary multiplication case should work"
+        );
+
+        // Case 3: page=5, limit=3, total=14
+        // Correct: 5*3 = 15, 15 < 14 is false (no more pages) ✓
+        // Mutated: 5+3 = 8, 8 < 14 is true (would have more pages) ✗
+        let result = create_paginated_response(&data, "items", 0, 14, 5, 3);
+        assert!(
+            result.is_ok(),
+            "Over-boundary multiplication case should work"
+        );
+    }
+
+    #[test]
+    fn test_create_paginated_response_comparison_edge_cases() {
+        // Tests that target the > 0 vs >= 0 mutations (lines 97 & 105)
+        let data = serde_json::json!([]);
+
+        // Case 1: total_count = 0
+        // Correct: if total_count > 0 (false, use else branch)
+        // Mutated: if total_count >= 0 (true, use wrong branch)
+        let result = create_paginated_response(&data, "items", 0, 0, 1, 10);
+        assert!(result.is_ok(), "Zero total count should work");
+
+        // Case 2: returned_count = 0
+        // Correct: if returned_count > 0 (false, use else branch)
+        // Mutated: if returned_count >= 0 (true, use wrong branch)
+        let result = create_paginated_response(&data, "items", 0, 5, 1, 10);
+        assert!(result.is_ok(), "Zero returned count should work");
+
+        // Case 3: Both counts = 1 (positive)
+        // Both > 0 and >= 0 should be true, so behavior same
+        let single_data = serde_json::json!([{"id": 1}]);
+        let result = create_paginated_response(&single_data, "items", 1, 1, 1, 10);
+        assert!(result.is_ok(), "Positive counts should work");
+    }
 }

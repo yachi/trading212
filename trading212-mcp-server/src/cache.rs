@@ -531,4 +531,105 @@ mod tests {
             test_response
         );
     }
+
+    #[test]
+    fn test_endpoint_type_from_path_comprehensive() {
+        // Test instruments endpoint
+        assert_eq!(
+            EndpointType::from_path("equity/metadata/instruments"),
+            EndpointType::Instruments
+        );
+        assert_eq!(
+            EndpointType::from_path("metadata/instruments?search=AAPL"),
+            EndpointType::Instruments
+        );
+
+        // Test pies list endpoint (contains "pies" but not "pies/" or has < 2 slashes)
+        assert_eq!(
+            EndpointType::from_path("equity/pies"),
+            EndpointType::PiesList
+        );
+        assert_eq!(EndpointType::from_path("pies"), EndpointType::PiesList);
+
+        // Test pies detail endpoint (contains "pies/" AND has >= 2 slashes)
+        assert_eq!(
+            EndpointType::from_path("equity/pies/123"),
+            EndpointType::PieDetail
+        );
+        assert_eq!(
+            EndpointType::from_path("equity/pies/456/orders"),
+            EndpointType::PieDetail
+        );
+
+        // Test account endpoint
+        assert_eq!(
+            EndpointType::from_path("equity/account/cash"),
+            EndpointType::Account
+        );
+
+        // Test orders endpoint
+        assert_eq!(
+            EndpointType::from_path("equity/orders"),
+            EndpointType::Orders
+        );
+
+        // Test unknown endpoint
+        assert_eq!(
+            EndpointType::from_path("unknown/endpoint"),
+            EndpointType::Unknown
+        );
+    }
+
+    #[test]
+    fn test_endpoint_type_pies_edge_cases() {
+        // These tests specifically target the missed mutations in line 47
+
+        // Edge case: contains "pies/" but only has 1 slash total (should be PiesList, not PieDetail)
+        // This tests the && vs || mutation - if mutated to ||, this would incorrectly be PieDetail
+        assert_eq!(EndpointType::from_path("pies/"), EndpointType::PiesList);
+
+        // Edge case: contains "pies/" and has exactly 2 slashes (should be PieDetail)
+        assert_eq!(
+            EndpointType::from_path("equity/pies/123"),
+            EndpointType::PieDetail
+        );
+
+        // Edge case: contains "pies/" but has only 1 slash (should be PiesList)
+        assert_eq!(
+            EndpointType::from_path("some-pies/"),
+            EndpointType::PiesList
+        );
+
+        // Edge case: contains "pies/" and has more than 2 slashes (should be PieDetail)
+        assert_eq!(
+            EndpointType::from_path("api/equity/pies/123/details"),
+            EndpointType::PieDetail
+        );
+    }
+
+    #[test]
+    fn test_endpoint_type_slash_counting_logic() {
+        // These tests specifically target the == vs != mutation in slash counting
+
+        // Test endpoint with exactly 0 slashes and "pies/"
+        assert_eq!(EndpointType::from_path("pies-test"), EndpointType::PiesList);
+
+        // Test endpoint with exactly 1 slash and "pies/"
+        assert_eq!(EndpointType::from_path("pies/"), EndpointType::PiesList);
+
+        // Test endpoint with exactly 2 slashes and "pies/"
+        assert_eq!(
+            EndpointType::from_path("equity/pies/123"),
+            EndpointType::PieDetail
+        );
+
+        // Test endpoint with 3 slashes and "pies/"
+        assert_eq!(
+            EndpointType::from_path("api/equity/pies/123"),
+            EndpointType::PieDetail
+        );
+
+        // Test that paths without "pies/" are not affected by slash count
+        assert_eq!(EndpointType::from_path("a/b/c/d/e"), EndpointType::Unknown);
+    }
 }
