@@ -2597,4 +2597,341 @@ mod tests {
         let result = create_paginated_response(&single_data, "items", 1, 1, 1, 10);
         assert!(result.is_ok(), "Positive counts should work");
     }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_stream_parse_and_filter_critical_mutations() {
+        // Test arithmetic and comparison mutations in stream_parse_and_filter function
+        let tool = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(2),
+            page: Some(2),
+        };
+
+        // Test data with multiple instruments
+        let test_json = serde_json::to_string(&[
+            serde_json::json!({
+                "ticker": "AAPL_US_EQ",
+                "type": "STOCK",
+                "workingScheduleId": 1,
+                "isin": "US0378331005",
+                "currencyCode": "USD",
+                "name": "Apple Inc",
+                "shortName": "Apple",
+                "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            }),
+            serde_json::json!({
+                "ticker": "GOOGL_US_EQ",
+                "type": "STOCK",
+                "workingScheduleId": 1,
+                "isin": "US02079K3059",
+                "currencyCode": "USD",
+                "name": "Alphabet Inc",
+                "shortName": "Alphabet",
+                "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            }),
+            serde_json::json!({
+                "ticker": "MSFT_US_EQ",
+                "type": "STOCK",
+                "workingScheduleId": 1,
+                "isin": "US5949181045",
+                "currencyCode": "USD",
+                "name": "Microsoft Corp",
+                "shortName": "Microsoft",
+                "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            }),
+            serde_json::json!({
+                "ticker": "TSLA_US_EQ",
+                "type": "STOCK",
+                "workingScheduleId": 1,
+                "isin": "US88160R1014",
+                "currencyCode": "USD",
+                "name": "Tesla Inc",
+                "shortName": "Tesla",
+                "maxOpenQuantity": 1000.0,
+                "addedOn": "2020-01-01"
+            }),
+        ])
+        .unwrap();
+
+        // Test normal pagination (page 2, limit 2 should return MSFT and TSLA)
+        let result = tool.stream_parse_and_filter(&test_json).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].ticker, "MSFT_US_EQ");
+        assert_eq!(result[1].ticker, "TSLA_US_EQ");
+
+        // Test edge cases for skip_count calculation: (page - 1) * limit mutations
+        let tool_page_1 = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(2),
+            page: Some(1),
+        };
+        let result_page_1 = tool_page_1.stream_parse_and_filter(&test_json).unwrap();
+        assert_eq!(result_page_1.len(), 2);
+        assert_eq!(result_page_1[0].ticker, "AAPL_US_EQ");
+        assert_eq!(result_page_1[1].ticker, "GOOGL_US_EQ");
+
+        // Test with large page to verify skip logic
+        let tool_page_3 = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(1),
+            page: Some(3),
+        };
+        let result_page_3 = tool_page_3.stream_parse_and_filter(&test_json).unwrap();
+        assert_eq!(result_page_3.len(), 1);
+        assert_eq!(result_page_3[0].ticker, "MSFT_US_EQ");
+
+        // Test with search filtering to verify processed_count increment logic
+        let tool_search = GetInstrumentsTool {
+            search: Some("Apple".to_string()),
+            instrument_type: None,
+            limit: Some(10),
+            page: Some(1),
+        };
+        let result_search = tool_search.stream_parse_and_filter(&test_json).unwrap();
+        assert_eq!(result_search.len(), 1);
+        assert_eq!(result_search[0].ticker, "AAPL_US_EQ");
+
+        // Test empty results
+        let tool_no_match = GetInstrumentsTool {
+            search: Some("NoMatch".to_string()),
+            instrument_type: None,
+            limit: Some(10),
+            page: Some(1),
+        };
+        let result_empty = tool_no_match.stream_parse_and_filter(&test_json).unwrap();
+        assert_eq!(result_empty.len(), 0);
+
+        // Test consecutive error threshold with malformed JSON
+        // Use page 1 for this test so we actually get the valid instrument
+        let tool_page_1_for_malformed = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(2),
+            page: Some(1),
+        };
+        let malformed_json = r#"[
+            {"ticker": "VALID", "type": "STOCK", "workingScheduleId": 1, "isin": "US123", "currencyCode": "USD", "name": "Valid", "shortName": "Valid", "maxOpenQuantity": 1000.0, "addedOn": "2020-01-01"},
+            {"invalid": "structure"},
+            {"another": "invalid"},
+            {"and": "another"}
+        ]"#;
+
+        // This should process the first valid item and handle errors for the rest
+        let result_malformed = tool_page_1_for_malformed.stream_parse_and_filter(malformed_json);
+        assert!(result_malformed.is_ok());
+        let instruments = result_malformed.unwrap();
+        assert_eq!(instruments.len(), 1); // Should have the valid instrument
+        assert_eq!(instruments[0].ticker, "VALID");
+
+        // Test completely invalid JSON
+        let invalid_json = "not valid json at all";
+        let result_invalid = tool.stream_parse_and_filter(invalid_json);
+        assert!(result_invalid.is_err());
+
+        // Test early termination logic when collected >= limit
+        let tool_small_limit = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(1),
+            page: Some(1),
+        };
+        let result_small = tool_small_limit
+            .stream_parse_and_filter(&test_json)
+            .unwrap();
+        assert_eq!(result_small.len(), 1);
+        assert_eq!(result_small[0].ticker, "AAPL_US_EQ");
+
+        // Test error_count > 0 comparison mutation by creating many parse errors
+        let tool_page_1_for_errors = GetInstrumentsTool {
+            search: None,
+            instrument_type: None,
+            limit: Some(10),
+            page: Some(1),
+        };
+        let many_errors_json = r#"[
+            {"ticker": "VALID1", "type": "STOCK", "workingScheduleId": 1, "isin": "US123", "currencyCode": "USD", "name": "Valid", "shortName": "Valid", "maxOpenQuantity": 1000.0, "addedOn": "2020-01-01"},
+            {"invalid": 1},
+            {"invalid": 2},
+            {"invalid": 3},
+            {"invalid": 4},
+            {"invalid": 5},
+            {"ticker": "VALID2", "type": "STOCK", "workingScheduleId": 1, "isin": "US456", "currencyCode": "USD", "name": "Valid2", "shortName": "Valid2", "maxOpenQuantity": 1000.0, "addedOn": "2020-01-01"}
+        ]"#;
+
+        let result_many_errors = tool_page_1_for_errors.stream_parse_and_filter(many_errors_json);
+        assert!(result_many_errors.is_ok());
+        // Should successfully process both valid instruments despite errors
+        let instruments = result_many_errors.unwrap();
+        assert_eq!(instruments.len(), 2);
+        assert_eq!(instruments[0].ticker, "VALID1"); // Should get first valid one
+        assert_eq!(instruments[1].ticker, "VALID2"); // Should get second valid one
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_update_pie_tool_validation_mutations() {
+        // Test mutations in UpdatePieTool validation functions
+
+        // Test add_goal with invalid float values (should fail, not return Ok(()))
+        let mut request_body = serde_json::Map::new();
+        let invalid_goal = f64::NAN; // NaN is not valid JSON
+        let result = UpdatePieTool::add_goal(&mut request_body, invalid_goal);
+        assert!(result.is_err(), "add_goal should fail with NaN value");
+
+        let invalid_goal = f64::INFINITY; // Infinity is not valid JSON
+        let result = UpdatePieTool::add_goal(&mut request_body, invalid_goal);
+        assert!(result.is_err(), "add_goal should fail with Infinity value");
+
+        // Test add_goal with valid values (should succeed)
+        let mut request_body = serde_json::Map::new();
+        let valid_goal = 1000.50;
+        let result = UpdatePieTool::add_goal(&mut request_body, valid_goal);
+        assert!(result.is_ok(), "add_goal should succeed with valid value");
+        assert_eq!(
+            request_body.get("goal").unwrap().as_f64().unwrap(),
+            valid_goal
+        );
+
+        // Test add_instrument_shares with empty allocations
+        let mut request_body = serde_json::Map::new();
+        let empty_shares = Vec::new();
+        let result = UpdatePieTool::add_instrument_shares(&mut request_body, &empty_shares);
+        assert!(
+            result.is_ok(),
+            "add_instrument_shares should succeed with empty vec"
+        );
+
+        // Test add_instrument_shares with valid allocations
+        let mut request_body = serde_json::Map::new();
+        let valid_shares = vec![
+            InstrumentAllocation {
+                ticker: "AAPL".to_string(),
+                weight: 0.5,
+            },
+            InstrumentAllocation {
+                ticker: "GOOGL".to_string(),
+                weight: 0.3,
+            },
+        ];
+        let result = UpdatePieTool::add_instrument_shares(&mut request_body, &valid_shares);
+        assert!(
+            result.is_ok(),
+            "add_instrument_shares should succeed with valid allocations"
+        );
+
+        // Verify the instrument shares were added correctly
+        let shares_value = request_body.get("instrumentShares").unwrap();
+        assert!(
+            shares_value.is_object(),
+            "instrumentShares should be an object"
+        );
+
+        // Test build_request_body with various combinations to ensure it can fail
+        // Test case 1: Empty UpdatePieTool (should succeed with empty body)
+        let empty_tool = UpdatePieTool {
+            pie_id: 123,
+            name: None,
+            instrument_shares: None,
+            goal: None,
+            icon: None,
+            dividend_cash_action: None,
+            end_date: None,
+        };
+        let result = empty_tool.build_request_body();
+        assert!(
+            result.is_ok(),
+            "build_request_body should succeed with empty tool"
+        );
+        let body = result.unwrap();
+        assert!(
+            body.is_empty(),
+            "Empty tool should produce empty request body"
+        );
+
+        // Test case 2: Tool with valid goal (should succeed)
+        let tool_with_goal = UpdatePieTool {
+            pie_id: 123,
+            name: None,
+            instrument_shares: None,
+            goal: Some(5000.0),
+            icon: None,
+            dividend_cash_action: None,
+            end_date: None,
+        };
+        let result = tool_with_goal.build_request_body();
+        assert!(
+            result.is_ok(),
+            "build_request_body should succeed with valid goal"
+        );
+        let body = result.unwrap();
+        assert!(
+            body.contains_key("goal"),
+            "Request body should contain goal"
+        );
+
+        // Test case 3: Tool with invalid goal (should fail)
+        let tool_with_invalid_goal = UpdatePieTool {
+            pie_id: 123,
+            name: None,
+            instrument_shares: None,
+            goal: Some(f64::NAN),
+            icon: None,
+            dividend_cash_action: None,
+            end_date: None,
+        };
+        let result = tool_with_invalid_goal.build_request_body();
+        assert!(
+            result.is_err(),
+            "build_request_body should fail with invalid goal"
+        );
+
+        // Test case 4: Tool with valid instrument shares (should succeed)
+        let tool_with_shares = UpdatePieTool {
+            pie_id: 123,
+            name: Some("Test Pie".to_string()),
+            instrument_shares: Some(vec![
+                InstrumentAllocation {
+                    ticker: "AAPL".to_string(),
+                    weight: 0.4,
+                },
+                InstrumentAllocation {
+                    ticker: "MSFT".to_string(),
+                    weight: 0.6,
+                },
+            ]),
+            goal: None,
+            icon: Some("icon1".to_string()),
+            dividend_cash_action: Some("REINVEST".to_string()),
+            end_date: None,
+        };
+        let result = tool_with_shares.build_request_body();
+        assert!(
+            result.is_ok(),
+            "build_request_body should succeed with valid shares"
+        );
+        let body = result.unwrap();
+        assert!(
+            body.contains_key("name"),
+            "Request body should contain name"
+        );
+        assert!(
+            body.contains_key("instrumentShares"),
+            "Request body should contain instrumentShares"
+        );
+        assert!(
+            body.contains_key("icon"),
+            "Request body should contain icon"
+        );
+        assert!(
+            body.contains_key("dividendCashAction"),
+            "Request body should contain dividendCashAction"
+        );
+    }
 }
