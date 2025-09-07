@@ -13,7 +13,7 @@ This is a Trading212 MCP (Model Context Protocol) server implementation that pro
 1. **Read Documentation**: Review `AGENTS.md` and `trading212-api.md` before starting
 2. **Code Quality**: Follow the quality requirements specified in `AGENTS.md`
 3. **Testing**: Ensure all changes work with the Trading212 API
-4. **Verification**: Run clippy, fmt, and build checks before completing tasks
+4. **Verification**: Pre-commit hooks handle formatting; CI runs comprehensive checks (clippy, tests, build) on PRs
 
 ## Key Files
 

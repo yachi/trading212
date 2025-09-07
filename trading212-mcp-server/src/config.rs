@@ -48,6 +48,15 @@ impl Trading212Config {
         Self::with_env_provider(&SystemEnvProvider)
     }
 
+    /// Create a new configuration with a provided API key (useful for testing)
+    #[allow(dead_code)]
+    pub fn new_with_api_key(api_key: String) -> Self {
+        Self {
+            api_key,
+            base_url: "https://live.trading212.com/api/v0".to_string(),
+        }
+    }
+
     /// Create a new configuration with a custom environment provider (useful for testing)
     pub fn with_env_provider(env_provider: &dyn EnvProvider) -> Result<Self, Trading212Error> {
         let api_key = Self::load_api_key_with_env(env_provider)?;

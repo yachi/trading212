@@ -8,12 +8,12 @@ Before working with Trading212 API, read `trading212-api.md` first.
 
 ## Code Quality Requirements
 
-After completing any code-changing tasks:
+Code quality is enforced through automated checks:
 
-1. **Run clippy**: Always execute `cargo clippy` to check for lint issues
-2. **Run fmt**: Execute `cargo fmt` to ensure consistent code formatting
+1. **Pre-commit**: Formatting (`cargo fmt`) is checked on every commit
+2. **CI Pipeline**: Clippy, tests, and build verification run automatically on PRs
 3. **Address warnings**: Fix any clippy warnings that can be reasonably addressed
-4. **Build verification**: Ensure `cargo build --release` succeeds after changes
+4. **Manual checks**: For local development, you can run `cargo clippy`, `cargo test`, and `cargo build --release`
 5. **Test coverage**: Run `cargo llvm-cov --summary-only` to verify test coverage
 6. **Code review**: Perform comprehensive code review of all changes
 7. **Code tracing**: Read and trace through modified code paths to understand:
