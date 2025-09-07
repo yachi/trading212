@@ -66,7 +66,9 @@ async fn setup_test_environment() -> (Client, Trading212Config, Trading212Cache)
 
     // Set up test environment variables for config
     std::env::set_var("TRADING212_API_KEY", "test_key");
-    let config = Trading212Config::new().unwrap();
+
+    // Create config without reading from file for testing
+    let config = Trading212Config::new_with_api_key("test_key".to_string());
     let cache = Trading212Cache::new().unwrap();
 
     // Pre-populate cache with mock data

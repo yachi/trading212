@@ -789,7 +789,8 @@ impl GetInstrumentsTool {
         }
 
         // Check if we failed to parse anything at all - could indicate malformed JSON
-        if processed_count == 0 {
+        // Note: Empty arrays are valid - they just mean no instruments match
+        if processed_count == 0 && error_count > 0 {
             let error = Trading212Error::parse_error("Response appears to be malformed JSON");
             tracing::error!(error = %error, "Failed to parse any instruments from response");
             return Err(CallToolError::new(error));

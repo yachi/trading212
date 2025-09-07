@@ -32,7 +32,9 @@ async fn setup_test_env() -> (
     std::env::set_var("TRADING212_API_KEY", "test_key");
     std::env::set_var("TRADING212_BASE_URL", mock_server.uri());
 
-    let config = Trading212Config::new().expect("Failed to create config");
+    // Use the mock config method to avoid file system dependency
+    let mut config = Trading212Config::new_with_api_key("test_key".to_string());
+    config.base_url = mock_server.uri();
     let cache = Trading212Cache::new().expect("Failed to create cache");
     let client = reqwest::Client::new();
 
