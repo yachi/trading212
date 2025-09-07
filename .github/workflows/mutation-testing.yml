@@ -21,6 +21,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   mutation-testing:
     name: Run Mutation Tests
@@ -33,6 +38,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for diff comparison
       
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -61,11 +68,15 @@ jobs:
       - name: Run incremental mutation testing on PR
         if: github.event_name == 'pull_request'
         run: |
-          # Use --in-diff to only test mutations in changed lines
-          cargo mutants --in-diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
+          # Generate diff file for cargo-mutants
+          echo "Generating diff file from ${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
+          git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} > pr-changes.diff
+          echo "Diff file generated, size: $(wc -l < pr-changes.diff) lines"
+          
+          # Use --in-diff with the generated diff file
+          cargo mutants --in-diff pr-changes.diff \
             --timeout 30 \
             --output mutants-pr.out
-        continue-on-error: true
       
       - name: Run full mutation testing
         if: github.event_name != 'pull_request'
@@ -103,8 +114,8 @@ jobs:
         with:
           name: mutation-report-${{ github.sha }}
           path: |
-            trading212-mcp-server/mutants-pr.out/
-            trading212-mcp-server/mutants-full.out/
+            mutants-pr.out/
+            mutants-full.out/
           retention-days: 30
       
       - name: Comment PR with results
@@ -118,8 +129,7 @@ jobs:
                          '> This PR was tested using incremental mutation testing (`--in-diff`) which only tests mutations in changed lines, making it faster and more focused.\n\n';
             
             try {
-              const outcomesPath = path.join('trading212-mcp-server', 'mutants-pr.out', 'outcomes.json');
-              const outcomes = JSON.parse(fs.readFileSync(outcomesPath, 'utf8'));
+              const outcomes = JSON.parse(fs.readFileSync('mutants-pr.out/outcomes.json', 'utf8'));
               const total = outcomes.summary.total || 0;
               const caught = outcomes.summary.caught || 0;
               const missed = outcomes.summary.missed || 0;

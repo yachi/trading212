@@ -14,6 +14,10 @@
 //!
 //! The module provides comprehensive data structures matching the Trading212 API responses,
 //! including [`Instrument`], [`Pie`], [`DividendDetails`], and [`PieResult`].
+//!
+//! ## Test Coverage
+//!
+//! The module is tested with comprehensive mutation testing via GitHub Actions.
 
 #![allow(missing_docs)] // Allow missing docs for JsonSchema generated code
 
