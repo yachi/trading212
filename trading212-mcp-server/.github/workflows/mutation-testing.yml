@@ -25,7 +25,7 @@ jobs:
   mutation-testing:
     name: Run Mutation Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     
     steps:
       - name: Checkout code
@@ -55,9 +55,13 @@ jobs:
             cargo install cargo-mutants
           fi
       
-      - name: Run quick mutation testing
+      - name: Run incremental mutation testing on PR
         if: github.event_name == 'pull_request'
-        run: cargo mutants --timeout 10 --output mutants-quick.out
+        run: |
+          # Use --in-diff to only test mutations in changed lines
+          cargo mutants --in-diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
+            --timeout 30 \
+            --output mutants-pr.out
         continue-on-error: true
       
       - name: Run full mutation testing
@@ -68,9 +72,9 @@ jobs:
       - name: Generate mutation report summary
         if: always()
         run: |
-          if [ -d "mutants-quick.out" ]; then
-            echo "## Quick Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
-            cat mutants-quick.out/outcomes.json | jq -r '
+          if [ -d "mutants-pr.out" ]; then
+            echo "## PR Mutation Testing Results (Changed Lines Only)" >> $GITHUB_STEP_SUMMARY
+            cat mutants-pr.out/outcomes.json | jq -r '
               "- Total: \(.summary.total)",
               "- Caught: \(.summary.caught)",
               "- Missed: \(.summary.missed)",
@@ -96,7 +100,7 @@ jobs:
         with:
           name: mutation-report-${{ github.sha }}
           path: |
-            mutants-quick.out/
+            mutants-pr.out/
             mutants-full.out/
           retention-days: 30
       
@@ -106,10 +110,11 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let comment = '## 🧬 Mutation Testing Results\n\n';
+            let comment = '## 🧬 Mutation Testing Results (Changed Lines Only)\n\n' +
+                         '> This PR was tested using incremental mutation testing (`--in-diff`) which only tests mutations in changed lines, making it faster and more focused.\n\n';
             
             try {
-              const outcomes = JSON.parse(fs.readFileSync('mutants-quick.out/outcomes.json', 'utf8'));
+              const outcomes = JSON.parse(fs.readFileSync('mutants-pr.out/outcomes.json', 'utf8'));
               const total = outcomes.summary.total || 0;
               const caught = outcomes.summary.caught || 0;
               const missed = outcomes.summary.missed || 0;
