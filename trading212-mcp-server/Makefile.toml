@@ -145,24 +145,34 @@ script = [
 
 # Mutation testing tasks
 [tasks.mutants]
-description = "Run mutation testing to verify test quality"
+description = "Run mutation testing to verify test quality (parallel)"
 command = "cargo"
-args = ["mutants"]
+args = ["mutants", "-j", "0"]
 
 [tasks.mutants-quick]
-description = "Run quick mutation testing (timeout 10s per mutation)"
+description = "Run quick mutation testing (timeout 10s per mutation, parallel)"
 command = "cargo"
-args = ["mutants", "--timeout", "10"]
+args = ["mutants", "--timeout", "10", "-j", "0"]
 
 [tasks.mutants-report]
-description = "Run mutation testing and generate detailed report"
+description = "Run mutation testing and generate detailed report (parallel)"
 command = "cargo"
-args = ["mutants", "--output", "mutants.out", "--colors", "true"]
+args = ["mutants", "--output", "mutants.out", "--colors", "true", "-j", "0"]
 
 [tasks.mutants-file]
 description = "Run mutation testing on a specific file"
 command = "cargo"
-args = ["mutants", "--file", "${FILE:-src/tools.rs}"]
+args = ["mutants", "--file", "${FILE:-src/tools.rs}", "-j", "0"]
+
+[tasks.mutants-sequential]
+description = "Run mutation testing sequentially (no parallelism)"
+command = "cargo"
+args = ["mutants", "-j", "1"]
+
+[tasks.mutants-parallel]
+description = "Run mutation testing with custom parallelism (default: 4 jobs)"
+command = "cargo"
+args = ["mutants", "-j", "${JOBS:-4}"]
 
 [tasks.mutants-clean]
 description = "Clean mutation testing output"
