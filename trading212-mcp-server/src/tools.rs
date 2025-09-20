@@ -236,16 +236,6 @@ pub struct InstrumentAllocation {
 
 /// Issue details for an instrument.
 ///
-/// Represents any known issues or alerts associated with a specific instrument
-/// within an investment pie (e.g., trading halts, corporate actions).
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InstrumentIssue {
-    /// Human-readable issue name or description
-    pub name: String,
-    /// Issue severity level (e.g., "LOW", "MEDIUM", "HIGH")
-    pub severity: String,
-}
-
 /// Represents a single instrument within an investment pie.
 ///
 /// Contains both the configuration (expected allocation) and current state
@@ -1746,12 +1736,6 @@ mod tests {
 
     mod error_path_tests {
         use super::*;
-        use serde::{Deserialize, Serialize};
-
-        #[derive(Debug, Serialize, Deserialize)]
-        struct TestResponse {
-            data: String,
-        }
 
         #[test]
         fn test_response_creation_edge_cases() {
