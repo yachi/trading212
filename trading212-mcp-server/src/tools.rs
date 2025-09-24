@@ -308,7 +308,7 @@ pub struct DetailedPieResponse {
 
 #[mcp_tool(
     name = "get_instruments",
-    description = "Get paginated list of tradeable instruments from Trading212. Use limit and page for efficient pagination through large datasets. Recommended: limit=50-100 for optimal performance.",
+    description = "Get paginated list of tradeable instruments from Trading212. Use limit and page for efficient pagination through large datasets. Supports comma-separated search terms for multiple tickers (e.g., \"AAPL,MSFT,GOOGL\"). Recommended: limit=50-100 for optimal performance.",
     title = "Get Trading212 Instruments (Paginated)",
     idempotent_hint = true,
     destructive_hint = false,
@@ -324,6 +324,7 @@ pub struct DetailedPieResponse {
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct GetInstrumentsTool {
     /// Optional search term to filter instruments (e.g., "AAPL", "Apple")
+    /// Supports comma-separated values for multiple tickers (e.g., "AAPL,MSFT,GOOGL")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
 
@@ -789,17 +790,49 @@ impl GetInstrumentsTool {
         Ok(filtered_instruments)
     }
 
+    /// Parse search term into individual terms, handling comma-separated values
+    fn parse_search_terms(search_term: &str) -> Vec<String> {
+        search_term
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// Check if an instrument matches a specific search term
+    fn instrument_matches_term(instrument: &Instrument, term: &str) -> bool {
+        instrument.ticker.to_lowercase().contains(term)
+            || instrument.name.to_lowercase().contains(term)
+            || instrument.short_name.to_lowercase().contains(term)
+            || instrument.isin.to_lowercase().contains(term)
+    }
+
+    /// Check if an instrument matches any of the search terms
+    fn search_matches_instrument(instrument: &Instrument, search_term: &str) -> bool {
+        let search_terms = Self::parse_search_terms(search_term);
+
+        if search_terms.is_empty() {
+            // If parsing resulted in empty terms, use the original search term
+            let search_lower = search_term.to_lowercase();
+            Self::instrument_matches_term(instrument, &search_lower)
+        } else {
+            // Check if any search term matches
+            Self::search_matches_instrument_cached(instrument, &search_terms)
+        }
+    }
+
+    /// Check if an instrument matches any of the provided search terms
+    fn search_matches_instrument_cached(instrument: &Instrument, search_terms: &[String]) -> bool {
+        search_terms
+            .iter()
+            .any(|term| Self::instrument_matches_term(instrument, term))
+    }
+
     /// Check if an instrument matches the current filters
     fn matches_filters(&self, instrument: &Instrument) -> bool {
         // Apply search filter if provided
         if let Some(ref search_term) = self.search {
-            let search_lower = search_term.to_lowercase();
-            let matches_search = instrument.ticker.to_lowercase().contains(&search_lower)
-                || instrument.name.to_lowercase().contains(&search_lower)
-                || instrument.short_name.to_lowercase().contains(&search_lower)
-                || instrument.isin.to_lowercase().contains(&search_lower);
-
-            if !matches_search {
+            if !Self::search_matches_instrument(instrument, search_term) {
                 return false;
             }
         }
@@ -839,12 +872,38 @@ impl GetInstrumentsTool {
             }
         }
 
-        // Validate search term length
+        // Validate search term
         if let Some(ref search) = self.search {
-            if search.len() > 100 {
+            if search.len() > 1000 {
                 return Err(CallToolError::new(Trading212Error::conversion_error(
-                    "search term must be 100 characters or less".to_string(),
+                    "search term must be 1000 characters or less".to_string(),
                 )));
+            }
+
+            // Empty search strings are allowed - they just return all instruments
+            // Only reject if it's just whitespace with no actual content
+            if !search.is_empty() && search.trim().is_empty() {
+                return Err(CallToolError::new(Trading212Error::conversion_error(
+                    "search term cannot be whitespace only".to_string(),
+                )));
+            }
+
+            // Validate number of comma-separated terms
+            let term_count = search.split(',').count();
+            if term_count > 50 {
+                return Err(CallToolError::new(Trading212Error::conversion_error(
+                    "too many search terms (maximum 50 allowed)".to_string(),
+                )));
+            }
+
+            // Check for excessively long individual terms
+            for term in search.split(',') {
+                let trimmed = term.trim();
+                if trimmed.len() > 100 {
+                    return Err(CallToolError::new(Trading212Error::conversion_error(
+                        "individual search terms must be 100 characters or less".to_string(),
+                    )));
+                }
             }
         }
 
@@ -927,14 +986,20 @@ impl GetInstrumentsTool {
 
         // Apply search filter if provided
         if let Some(ref search_term) = self.search {
-            let search_lower = search_term.to_lowercase();
-            filtered.retain(|instrument| {
-                // Search in multiple fields: ticker, name, short_name, and ISIN
-                instrument.ticker.to_lowercase().contains(&search_lower)
-                    || instrument.name.to_lowercase().contains(&search_lower)
-                    || instrument.short_name.to_lowercase().contains(&search_lower)
-                    || instrument.isin.to_lowercase().contains(&search_lower)
-            });
+            // Parse search terms once and cache for all instruments
+            let search_terms = Self::parse_search_terms(search_term);
+            if search_terms.is_empty() {
+                // Fall back to original search term
+                filtered.retain(|instrument| {
+                    let search_lower = search_term.to_lowercase();
+                    Self::instrument_matches_term(instrument, &search_lower)
+                });
+            } else {
+                // Use cached parsed terms
+                filtered.retain(|instrument| {
+                    Self::search_matches_instrument_cached(instrument, &search_terms)
+                });
+            }
 
             tracing::debug!(
                 search_term = search_term,
@@ -2131,6 +2196,166 @@ mod tests {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].ticker, "ETF1_US_EQ");
             assert_eq!(filtered[0].instrument_type, "ETF");
+        }
+
+        #[test]
+        fn test_apply_client_side_filtering_multiple_search() {
+            // Test comma-separated search terms
+            let tool = GetInstrumentsTool {
+                search: Some("AAPL,MSFT,GOOGL".to_string()),
+                instrument_type: None,
+                limit: None,
+                page: None,
+            };
+
+            let instruments = vec![
+                Instrument {
+                    ticker: "AAPL_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US0378331005".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Apple Inc".to_string(),
+                    short_name: "AAPL".to_string(),
+                    max_open_quantity: 66418.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "MSFT_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US5949181045".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Microsoft Corporation".to_string(),
+                    short_name: "MSFT".to_string(),
+                    max_open_quantity: 50000.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "GOOGL_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US02079K3059".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Alphabet Inc Class A".to_string(),
+                    short_name: "GOOGL".to_string(),
+                    max_open_quantity: 40000.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "NVDA_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US67066G1040".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "NVIDIA Corporation".to_string(),
+                    short_name: "NVDA".to_string(),
+                    max_open_quantity: 30000.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "TSLA_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US88160R1014".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Tesla Inc".to_string(),
+                    short_name: "TSLA".to_string(),
+                    max_open_quantity: 25000.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+            ];
+
+            let filtered = tool.apply_client_side_filtering(instruments);
+            // Should return only AAPL, MSFT, and GOOGL
+            assert_eq!(filtered.len(), 3);
+
+            let tickers: Vec<String> = filtered.iter().map(|i| i.ticker.clone()).collect();
+            assert!(tickers.contains(&"AAPL_US_EQ".to_string()));
+            assert!(tickers.contains(&"MSFT_US_EQ".to_string()));
+            assert!(tickers.contains(&"GOOGL_US_EQ".to_string()));
+            assert!(!tickers.contains(&"NVDA_US_EQ".to_string()));
+            assert!(!tickers.contains(&"TSLA_US_EQ".to_string()));
+        }
+
+        #[test]
+        fn test_apply_client_side_filtering_multiple_search_partial_match() {
+            // Test comma-separated search with partial matches
+            let tool = GetInstrumentsTool {
+                search: Some("NET,PAL,FIG".to_string()),
+                instrument_type: None,
+                limit: None,
+                page: None,
+            };
+
+            let instruments = vec![
+                Instrument {
+                    ticker: "NET_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 56,
+                    isin: "US18915M1071".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Cloudflare".to_string(),
+                    short_name: "NET".to_string(),
+                    max_open_quantity: 32342.0,
+                    added_on: "2019-09-13T13:12:53.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "ANET_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 56,
+                    isin: "US0404132054".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Arista Networks".to_string(),
+                    short_name: "ANET".to_string(),
+                    max_open_quantity: 56111.0,
+                    added_on: "2020-01-25T12:05:42.000+02:00".to_string(),
+                },
+                Instrument {
+                    ticker: "PLTR_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US69608A1088".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Palantir Technologies".to_string(),
+                    short_name: "PLTR".to_string(),
+                    max_open_quantity: 84066.0,
+                    added_on: "2020-09-28T18:01:32.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "FIG_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 56,
+                    isin: "US3168411052".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Figma".to_string(),
+                    short_name: "FIG".to_string(),
+                    max_open_quantity: 1515.0,
+                    added_on: "2025-07-31T09:35:33.000+03:00".to_string(),
+                },
+                Instrument {
+                    ticker: "TSLA_US_EQ".to_string(),
+                    instrument_type: "STOCK".to_string(),
+                    working_schedule_id: 71,
+                    isin: "US88160R1014".to_string(),
+                    currency_code: "USD".to_string(),
+                    name: "Tesla Inc".to_string(),
+                    short_name: "TSLA".to_string(),
+                    max_open_quantity: 25000.0,
+                    added_on: "2018-07-12T07:10:11.000+03:00".to_string(),
+                },
+            ];
+
+            let filtered = tool.apply_client_side_filtering(instruments);
+            // Should return NET, ANET (contains "net"), PLTR (contains "pal"), FIG
+            assert_eq!(filtered.len(), 4);
+
+            let tickers: Vec<String> = filtered.iter().map(|i| i.ticker.clone()).collect();
+            assert!(tickers.contains(&"NET_US_EQ".to_string()));
+            assert!(tickers.contains(&"ANET_US_EQ".to_string())); // Contains "NET"
+            assert!(tickers.contains(&"PLTR_US_EQ".to_string())); // Name contains "PAL"
+            assert!(tickers.contains(&"FIG_US_EQ".to_string()));
+            assert!(!tickers.contains(&"TSLA_US_EQ".to_string()));
         }
 
         #[test]
