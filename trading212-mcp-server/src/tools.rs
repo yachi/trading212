@@ -187,9 +187,9 @@ pub struct Pie {
     /// Performance results for the pie
     pub result: PieResult,
     /// Progress towards goal (0.0 to 1.0)
-    pub progress: f64,
+    pub progress: Option<f64>,
     /// Current status of the pie
-    pub status: String,
+    pub status: Option<String>,
 }
 
 /// Dividend details for a pie
@@ -273,18 +273,18 @@ pub struct PieSettings {
     /// User-defined name for the pie
     pub name: String,
     /// Visual icon identifier for the pie in the UI
-    pub icon: String,
+    pub icon: Option<String>,
     /// Target goal amount in the pie's base currency
-    pub goal: f64,
+    pub goal: Option<f64>,
     /// Pie creation timestamp (Unix timestamp as f64)
     #[serde(rename = "creationDate")]
     pub creation_date: f64,
     /// Target end date for the investment goal (ISO 8601 format)
     #[serde(rename = "endDate")]
-    pub end_date: String,
+    pub end_date: Option<String>,
     /// Initial investment amount when the pie was created
     #[serde(rename = "initialInvestment")]
-    pub initial_investment: f64,
+    pub initial_investment: Option<f64>,
     /// Dividend handling preference ("REINVEST" or "WITHDRAW")
     #[serde(rename = "dividendCashAction")]
     pub dividend_cash_action: String,
@@ -415,6 +415,36 @@ pub struct UpdatePieTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dividend_cash_action: Option<String>,
     /// Updated end date in ISO 8601 format (e.g., "2025-12-31T23:59:59.999Z")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<String>,
+}
+
+#[mcp_tool(
+    name = "create_pie",
+    description = "Create a new Trading212 investment pie",
+    title = "Create Trading212 Investment Pie"
+)]
+/// Tool for creating new investment pies in Trading212.
+///
+/// Creates a new investment pie with the specified settings including instrument allocations,
+/// name, goal, dividend handling, and other configuration parameters.
+#[allow(missing_docs)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CreatePieTool {
+    /// Pie name (required, max 100 characters)
+    pub name: String,
+    /// Instrument allocations (weights must sum to 1.0 or less)
+    pub instrument_shares: Vec<InstrumentAllocation>,
+    /// Pie icon identifier (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Target goal amount (must be positive, optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<f64>,
+    /// Dividend cash action ("`REINVEST`" or "`TO_ACCOUNT_CASH`", optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dividend_cash_action: Option<String>,
+    /// End date in ISO 8601 format (e.g., "2025-12-31T23:59:59.999Z", optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_date: Option<String>,
 }
@@ -1281,9 +1311,125 @@ impl UpdatePieTool {
     }
 }
 
+impl CreatePieTool {
+    /// Execute the `create_pie` tool.
+    ///
+    /// Creates a new investment pie in Trading212 API.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - HTTP client for making API requests
+    /// * `config` - Trading212 configuration containing API credentials
+    /// * `cache` - Cache and rate limiter for API requests (used for rate limiting only)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API request fails, response parsing fails,
+    /// or serialization of the results fails.
+    pub async fn call_tool(
+        &self,
+        client: &Client,
+        config: &Trading212Config,
+        _cache: &Trading212Cache,
+    ) -> Result<CallToolResult, CallToolError> {
+        tracing::debug!(name = %self.name, "Executing create_pie tool");
+
+        // Validate inputs
+        self.validate_inputs()?;
+
+        let url = config.endpoint_url("equity/pies");
+        let request_body = self.build_request_body()?;
+
+        tracing::debug!(
+            url = %url,
+            body = ?request_body,
+            "Sending create pie request"
+        );
+
+        let response_text =
+            Self::send_create_request(client, &url, &config.api_key, &request_body).await?;
+        let pie = Self::parse_response(&response_text)?;
+
+        tracing::info!(name = %self.name, "Successfully created pie");
+        create_single_item_response(&pie, "new investment pie")
+    }
+
+    /// Validate input parameters
+    fn validate_inputs(&self) -> Result<(), CallToolError> {
+        if self.name.trim().is_empty() {
+            return Err(CallToolError::new(Trading212Error::request_failed(
+                "Pie name cannot be empty".to_string(),
+            )));
+        }
+
+        if self.instrument_shares.is_empty() {
+            return Err(CallToolError::new(Trading212Error::request_failed(
+                "At least one instrument allocation is required".to_string(),
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Build the request body for the pie creation request
+    fn build_request_body(&self) -> Result<serde_json::Value, CallToolError> {
+        serde_json::to_value(self).map_err(|e| {
+            CallToolError::new(Trading212Error::serialization_error(format!(
+                "Failed to serialize request: {e}"
+            )))
+        })
+    }
+
+    /// Send the HTTP POST request to create a new pie
+    async fn send_create_request(
+        client: &Client,
+        url: &str,
+        api_key: &str,
+        request_body: &serde_json::Value,
+    ) -> Result<String, CallToolError> {
+        let response = client
+            .post(url)
+            .header("Authorization", api_key)
+            .header("Content-Type", "application/json")
+            .json(request_body)
+            .send()
+            .await
+            .map_err(|e| {
+                CallToolError::new(Trading212Error::request_failed(format!(
+                    "Failed to send create pie request: {e}"
+                )))
+            })?;
+
+        let status = response.status();
+        let response_text = response.text().await.map_err(|e| {
+            CallToolError::new(Trading212Error::request_failed(format!(
+                "Failed to read response: {e}"
+            )))
+        })?;
+
+        if !status.is_success() {
+            return Err(CallToolError::new(Trading212Error::api_error(
+                status.as_u16(),
+                response_text,
+            )));
+        }
+
+        Ok(response_text)
+    }
+
+    /// Parse the JSON response from Trading212 API
+    fn parse_response(response_text: &str) -> Result<DetailedPieResponse, CallToolError> {
+        serde_json::from_str(response_text).map_err(|e| {
+            CallToolError::new(Trading212Error::parse_error(format!(
+                "Failed to parse JSON response: {e}. Response body: {response_text}"
+            )))
+        })
+    }
+}
+
 tool_box! {
     Trading212Tools,
-    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool]
+    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool, CreatePieTool]
 }
 
 #[cfg(test)]
@@ -1337,7 +1483,7 @@ mod tests {
 
         // Verify settings structure
         assert_eq!(pie_response.settings.dividend_cash_action, "REINVEST");
-        assert_eq!(pie_response.settings.goal, 1000.0);
+        assert_eq!(pie_response.settings.goal, Some(1000.0));
         assert_eq!(pie_response.settings.creation_date, 1_640_995_200.0);
     }
 
@@ -1612,8 +1758,8 @@ mod tests {
                         price_avg_result: 100.0,
                         price_avg_result_coef: 0.1,
                     },
-                    progress: 0.75,
-                    status: "AHEAD".to_string(),
+                    progress: Some(0.75),
+                    status: Some("AHEAD".to_string()),
                 }]))
                 .mount(&mock_server)
                 .await;
@@ -1711,6 +1857,281 @@ mod tests {
             let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        #[allow(clippy::too_many_lines)]
+        async fn test_create_pie_success() {
+            let mock_server = MockServer::start().await;
+
+            // Mock realistic Trading212 API response with null values (like actual API response)
+            let mock_response = serde_json::json!({
+                "instruments": [
+                    {
+                        "ticker": "VRT_US_EQ",
+                        "result": {
+                            "priceAvgInvestedValue": 0.00,
+                            "priceAvgValue": 0.00,
+                            "priceAvgResult": 0.00,
+                            "priceAvgResultCoef": 0
+                        },
+                        "expectedShare": 0.3000,
+                        "currentShare": 0,
+                        "ownedQuantity": 0E-10,
+                        "issues": []
+                    },
+                    {
+                        "ticker": "VST_US_EQ",
+                        "result": {
+                            "priceAvgInvestedValue": 0.00,
+                            "priceAvgValue": 0.00,
+                            "priceAvgResult": 0.00,
+                            "priceAvgResultCoef": 0
+                        },
+                        "expectedShare": 0.2500,
+                        "currentShare": 0,
+                        "ownedQuantity": 0E-10,
+                        "issues": []
+                    },
+                    {
+                        "ticker": "CEG_US_EQ",
+                        "result": {
+                            "priceAvgInvestedValue": 0.00,
+                            "priceAvgValue": 0.00,
+                            "priceAvgResult": 0.00,
+                            "priceAvgResultCoef": 0
+                        },
+                        "expectedShare": 0.2500,
+                        "currentShare": 0,
+                        "ownedQuantity": 0E-10,
+                        "issues": []
+                    },
+                    {
+                        "ticker": "NEE_US_EQ",
+                        "result": {
+                            "priceAvgInvestedValue": 0.00,
+                            "priceAvgValue": 0.00,
+                            "priceAvgResult": 0.00,
+                            "priceAvgResultCoef": 0
+                        },
+                        "expectedShare": 0.2000,
+                        "currentShare": 0,
+                        "ownedQuantity": 0E-10,
+                        "issues": []
+                    }
+                ],
+                "settings": {
+                    "id": 5_533_006,
+                    "instrumentShares": null,
+                    "name": "AI Energy Infrastructure Test",
+                    "icon": null,
+                    "goal": null,
+                    "creationDate": 1_758_825_821.486_743,
+                    "endDate": null,
+                    "initialInvestment": null,
+                    "dividendCashAction": "REINVEST",
+                    "publicUrl": null
+                }
+            });
+
+            Mock::given(method("POST"))
+                .and(path("/equity/pies"))
+                .and(header("Authorization", "test_key"))
+                .and(header("Content-Type", "application/json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(mock_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = CreatePieTool {
+                name: "AI Energy Infrastructure Test".to_string(),
+                instrument_shares: vec![
+                    InstrumentAllocation {
+                        ticker: "VRT_US_EQ".to_string(),
+                        weight: 0.3,
+                    },
+                    InstrumentAllocation {
+                        ticker: "CEG_US_EQ".to_string(),
+                        weight: 0.25,
+                    },
+                    InstrumentAllocation {
+                        ticker: "VST_US_EQ".to_string(),
+                        weight: 0.25,
+                    },
+                    InstrumentAllocation {
+                        ticker: "NEE_US_EQ".to_string(),
+                        weight: 0.2,
+                    },
+                ],
+                icon: None,
+                goal: None,
+                dividend_cash_action: Some("REINVEST".to_string()),
+                end_date: None,
+            };
+
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            assert!(result.is_ok());
+            let response = result.unwrap();
+
+            // Verify response contains expected content
+            assert!(!response.content.is_empty());
+
+            // Check if response contains expected pie details
+            let response_str = format!("{:?}", response);
+            assert!(response_str.contains("AI Energy Infrastructure Test"));
+            assert!(response_str.contains("5533006")); // Pie ID from realistic mock response
+            assert!(response_str.contains("REINVEST"));
+        }
+
+        #[tokio::test]
+        async fn test_create_pie_validation_error() {
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: "http://mock.example.com".to_string(),
+            };
+
+            let client = Client::new();
+
+            // Test with empty name
+            let tool = CreatePieTool {
+                name: "".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "AAPL".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_create_pie_api_error() {
+            let mock_server = MockServer::start().await;
+
+            // Mock API error response
+            Mock::given(method("POST"))
+                .and(path("/equity/pies"))
+                .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "code": "InvalidInstrument",
+                    "message": "Instrument not found"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = CreatePieTool {
+                name: "Test Pie".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "INVALID_TICKER".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_create_pie_with_null_values_parsing() {
+            let mock_server = MockServer::start().await;
+
+            // Mock response exactly like the problematic real API response with null values
+            let mock_response = serde_json::json!({
+                "instruments": [
+                    {
+                        "ticker": "VRT_US_EQ",
+                        "result": {
+                            "priceAvgInvestedValue": 0.00,
+                            "priceAvgValue": 0.00,
+                            "priceAvgResult": 0.00,
+                            "priceAvgResultCoef": 0
+                        },
+                        "expectedShare": 0.3000,
+                        "currentShare": 0,
+                        "ownedQuantity": 0E-10,
+                        "issues": []
+                    }
+                ],
+                "settings": {
+                    "id": 5_533_007,
+                    "instrumentShares": null,  // This null was causing parsing issues
+                    "name": "Test Null Values",
+                    "icon": null,              // This null was causing parsing issues
+                    "goal": null,              // This null was causing parsing issues
+                    "creationDate": 1_758_825_821.486_743,
+                    "endDate": null,           // This null was causing parsing issues
+                    "initialInvestment": null, // This null was causing parsing issues
+                    "dividendCashAction": "REINVEST",
+                    "publicUrl": null          // This null was fine (always optional)
+                }
+            });
+
+            Mock::given(method("POST"))
+                .and(path("/equity/pies"))
+                .and(header("Authorization", "test_key"))
+                .and(header("Content-Type", "application/json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(mock_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = CreatePieTool {
+                name: "Test Null Values".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "VRT_US_EQ".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: Some("REINVEST".to_string()),
+                end_date: None,
+            };
+
+            let cache = Trading212Cache::new().unwrap();
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            // This should now succeed because we fixed the nullable field parsing
+            assert!(
+                result.is_ok(),
+                "CreatePie should handle null values correctly"
+            );
+
+            let response = result.unwrap();
+            assert!(!response.content.is_empty());
+
+            let response_str = format!("{:?}", response);
+            assert!(response_str.contains("Test Null Values"));
+            assert!(response_str.contains("5533007"));
         }
     }
 

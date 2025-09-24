@@ -169,6 +169,11 @@ impl ServerHandler for Trading212Handler {
                     .call_tool(&self.client, &self.config, &self.cache)
                     .await
             }
+            Trading212Tools::CreatePieTool(create_pie_tool) => {
+                create_pie_tool
+                    .call_tool(&self.client, &self.config, &self.cache)
+                    .await
+            }
         };
 
         let duration = start_time.elapsed();
@@ -415,6 +420,7 @@ mod tests {
                 Trading212Tools::GetPiesTool(_) => assert!(true),
                 Trading212Tools::GetPieByIdTool(_) => assert!(true),
                 Trading212Tools::UpdatePieTool(_) => assert!(true),
+                Trading212Tools::CreatePieTool(_) => assert!(true),
             }
         }
     }
@@ -531,15 +537,20 @@ mod tests {
                     // This would call tool.call_tool(&client, &config).await in real handler
                     assert!(true);
                 }
+                Trading212Tools::CreatePieTool(_tool) => {
+                    // This would call tool.call_tool(&client, &config).await in real handler
+                    assert!(true);
+                }
             }
         }
 
         // Test tools list generation (covers the handle_list_tools_request path)
         let tools_list = Trading212Tools::tools();
-        assert_eq!(tools_list.len(), 4);
+        assert_eq!(tools_list.len(), 5);
         assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
         assert!(tools_list.iter().any(|t| t.name == "get_pies"));
         assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
+        assert!(tools_list.iter().any(|t| t.name == "create_pie"));
     }
 
     #[tokio::test]
@@ -653,6 +664,10 @@ mod tests {
                     assert!(true);
                 }
                 Trading212Tools::UpdatePieTool(_) => {
+                    // Would call tool.call_tool(&self.client, &self.config).await
+                    assert!(true);
+                }
+                Trading212Tools::CreatePieTool(_) => {
                     // Would call tool.call_tool(&self.client, &self.config).await
                     assert!(true);
                 }
@@ -824,7 +839,7 @@ mod tests {
 
         // Test the tools() method that's called in handle_list_tools_request
         let tools = Trading212Tools::tools();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
 
         // Verify tool properties that are set in the async method
         let tool_names: Vec<_> = tools.iter().map(|t| &t.name).collect();
@@ -832,6 +847,7 @@ mod tests {
         assert!(tool_names.contains(&&"get_pies".to_string()));
         assert!(tool_names.contains(&&"get_pie_by_id".to_string()));
         assert!(tool_names.contains(&&"update_pie".to_string()));
+        assert!(tool_names.contains(&&"create_pie".to_string()));
 
         // Test tool structure that would be returned by handle_list_tools_request
         for tool in &tools {
@@ -845,7 +861,7 @@ mod tests {
 
         // Test the debug logging data that would be used
         let debug_data: Vec<_> = tools.iter().map(|t| &t.name).collect();
-        assert_eq!(debug_data.len(), 4);
+        assert_eq!(debug_data.len(), 5);
     }
 
     #[tokio::test]
@@ -897,6 +913,7 @@ mod tests {
                 Trading212Tools::GetPiesTool(_) => assert_eq!(tool_name, "get_pies"),
                 Trading212Tools::GetPieByIdTool(_) => assert_eq!(tool_name, "get_pie_by_id"),
                 Trading212Tools::UpdatePieTool(_) => assert_eq!(tool_name, "update_pie"),
+                Trading212Tools::CreatePieTool(_) => assert_eq!(tool_name, "create_pie"),
             }
         }
 

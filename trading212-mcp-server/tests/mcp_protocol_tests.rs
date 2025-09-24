@@ -195,7 +195,7 @@ async fn test_real_mcp_list_tools() {
     assert!(result["tools"].is_array());
 
     let tools = result["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 5);
 
     let tool_names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
@@ -203,6 +203,7 @@ async fn test_real_mcp_list_tools() {
     assert!(tool_names.contains(&"get_pies"));
     assert!(tool_names.contains(&"get_pie_by_id"));
     assert!(tool_names.contains(&"update_pie"));
+    assert!(tool_names.contains(&"create_pie"));
 }
 
 /// Real integration test: Call get_instruments tool via MCP protocol with client-side filtering
