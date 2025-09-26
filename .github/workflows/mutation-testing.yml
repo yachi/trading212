@@ -41,17 +41,28 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/
             ~/.cargo/git/
             trading212-mcp-server/target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('trading212-mcp-server/Cargo.lock') }}
 
+      - name: Cache cargo-mutants binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-25.3.1-${{ runner.os }}
+
       - name: Install cargo-binstall
         run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/v1.15.5/install-from-binstall-release.sh | bash
 
       - name: Install cargo-mutants
-        run: cargo binstall --no-confirm --locked cargo-mutants@25.3.1
+        run: |
+          if ! command -v cargo-mutants &> /dev/null; then
+            echo "cargo-mutants not found in cache, installing..."
+            cargo binstall --no-confirm --locked cargo-mutants@25.3.1
+          else
+            echo "cargo-mutants found in cache, skipping installation"
+          fi
 
       - name: Run mutation testing
         if: github.event_name == 'pull_request'
