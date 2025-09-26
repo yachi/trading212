@@ -2133,6 +2133,188 @@ mod tests {
             assert!(response_str.contains("Test Null Values"));
             assert!(response_str.contains("5533007"));
         }
+
+        // Unit tests for CreatePieTool methods to catch mutations
+        #[test]
+        fn test_create_pie_validate_inputs_empty_name() {
+            let tool = CreatePieTool {
+                name: "".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "AAPL".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.validate_inputs();
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("name cannot be empty"));
+        }
+
+        #[test]
+        fn test_create_pie_validate_inputs_whitespace_name() {
+            let tool = CreatePieTool {
+                name: "   ".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "AAPL".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.validate_inputs();
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("name cannot be empty"));
+        }
+
+        #[test]
+        fn test_create_pie_validate_inputs_empty_instruments() {
+            let tool = CreatePieTool {
+                name: "Valid Name".to_string(),
+                instrument_shares: vec![],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.validate_inputs();
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("At least one instrument allocation"));
+        }
+
+        #[test]
+        fn test_create_pie_validate_inputs_valid() {
+            let tool = CreatePieTool {
+                name: "Valid Pie".to_string(),
+                instrument_shares: vec![
+                    InstrumentAllocation {
+                        ticker: "AAPL".to_string(),
+                        weight: 0.5,
+                    },
+                    InstrumentAllocation {
+                        ticker: "GOOGL".to_string(),
+                        weight: 0.5,
+                    },
+                ],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.validate_inputs();
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_create_pie_build_request_body_basic() {
+            let tool = CreatePieTool {
+                name: "Test Pie".to_string(),
+                instrument_shares: vec![InstrumentAllocation {
+                    ticker: "AAPL".to_string(),
+                    weight: 1.0,
+                }],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.build_request_body();
+            assert!(result.is_ok());
+
+            let json = result.unwrap();
+            // Check the actual JSON structure
+            assert_eq!(json["name"], "Test Pie");
+            assert_eq!(json["instrument_shares"][0]["ticker"], "AAPL");
+            assert_eq!(json["instrument_shares"][0]["weight"], 1.0);
+            // Optional fields should not be present if None
+            assert_eq!(json.get("icon"), None);
+            assert_eq!(json.get("goal"), None);
+        }
+
+        #[test]
+        fn test_create_pie_build_request_body_with_optional_fields() {
+            let tool = CreatePieTool {
+                name: "Complete Pie".to_string(),
+                instrument_shares: vec![
+                    InstrumentAllocation {
+                        ticker: "AAPL".to_string(),
+                        weight: 0.6,
+                    },
+                    InstrumentAllocation {
+                        ticker: "GOOGL".to_string(),
+                        weight: 0.4,
+                    },
+                ],
+                icon: Some("📈".to_string()),
+                goal: Some(10000.0),
+                dividend_cash_action: Some("REINVEST".to_string()),
+                end_date: Some("2025-12-31T23:59:59Z".to_string()),
+            };
+
+            let result = tool.build_request_body();
+            assert!(result.is_ok());
+
+            let json = result.unwrap();
+            assert_eq!(json["name"], "Complete Pie");
+            assert_eq!(json["instrument_shares"].as_array().unwrap().len(), 2);
+            assert_eq!(json["icon"], "📈");
+            assert_eq!(json["goal"], 10000.0);
+            assert_eq!(json["dividend_cash_action"], "REINVEST");
+            assert_eq!(json["end_date"], "2025-12-31T23:59:59Z");
+        }
+
+        #[test]
+        fn test_create_pie_build_request_body_preserves_weights() {
+            let tool = CreatePieTool {
+                name: "Weight Test".to_string(),
+                instrument_shares: vec![
+                    InstrumentAllocation {
+                        ticker: "STOCK1".to_string(),
+                        weight: 0.25,
+                    },
+                    InstrumentAllocation {
+                        ticker: "STOCK2".to_string(),
+                        weight: 0.35,
+                    },
+                    InstrumentAllocation {
+                        ticker: "STOCK3".to_string(),
+                        weight: 0.40,
+                    },
+                ],
+                icon: None,
+                goal: None,
+                dividend_cash_action: None,
+                end_date: None,
+            };
+
+            let result = tool.build_request_body();
+            assert!(result.is_ok());
+
+            let json = result.unwrap();
+            let shares = json["instrument_shares"].as_array().unwrap();
+            assert_eq!(shares.len(), 3);
+            assert_eq!(shares[0]["weight"], 0.25);
+            assert_eq!(shares[1]["weight"], 0.35);
+            assert_eq!(shares[2]["weight"], 0.40);
+        }
     }
 
     mod helper_function_tests {
