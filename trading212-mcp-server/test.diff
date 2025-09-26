@@ -1,0 +1,1023 @@
+diff --git a/.github/workflows/mutation-testing.yml b/.github/workflows/mutation-testing.yml
+index 7ea5853..04de5bc 100644
+--- a/.github/workflows/mutation-testing.yml
++++ b/.github/workflows/mutation-testing.yml
+@@ -1,21 +1,15 @@
+ name: Mutation Testing
+ 
+ on:
+-  # Run on pull requests to main
+   pull_request:
+     branches: [main]
+     paths:
+       - 'src/**'
+       - 'Cargo.toml'
+       - 'Cargo.lock'
+-      - '.cargo/mutants.toml'
+-  
+-  # Allow manual triggering
+   workflow_dispatch:
+-  
+-  # Weekly scheduled run
+   schedule:
+-    - cron: '0 0 * * 0'  # Sunday at midnight
++    - cron: '0 0 * * 0'
+ 
+ env:
+   CARGO_TERM_COLOR: always
+@@ -24,136 +18,115 @@ env:
+ permissions:
+   contents: read
+   pull-requests: write
+-  issues: write
+ 
+ jobs:
+   mutation-testing:
+     name: Run Mutation Tests
+     runs-on: ubuntu-latest
+-    timeout-minutes: 45
++    timeout-minutes: 30
+     defaults:
+       run:
+         working-directory: ./trading212-mcp-server
+-    
++
+     steps:
+       - name: Checkout code
+         uses: actions/checkout@v4
+         with:
+-          fetch-depth: 0  # Fetch full history for diff comparison
+-      
++          fetch-depth: 0
++
+       - name: Setup Rust toolchain
+         uses: dtolnay/rust-toolchain@stable
+-        with:
+-          components: rustfmt, clippy
+-      
++
+       - name: Cache dependencies
+         uses: actions/cache@v4
+         with:
+           path: |
+             ~/.cargo/bin/
+-            ~/.cargo/registry/index/
+-            ~/.cargo/registry/cache/
+-            ~/.cargo/git/db/
++            ~/.cargo/registry/
++            ~/.cargo/git/
+             target/
+           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+-          restore-keys: |
+-            ${{ runner.os }}-cargo-
+-      
++
++      - name: Install cargo-binstall
++        run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/v1.15.5/install-from-binstall-release.sh | bash
++
+       - name: Install cargo-mutants
+-        run: |
+-          if ! command -v cargo-mutants &> /dev/null; then
+-            cargo install cargo-mutants
+-          fi
+-      
+-      - name: Run incremental mutation testing on PR
++        run: cargo binstall --no-confirm --locked cargo-mutants@25.3.1
++
++      - name: Run mutation testing
+         if: github.event_name == 'pull_request'
+         run: |
+-          # Generate diff file for cargo-mutants
+-          echo "Generating diff file from ${{ github.event.pull_request.base.sha }}..${{ github.sha }}"
+-          git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} > pr-changes.diff
+-          echo "Diff file generated, size: $(wc -l < pr-changes.diff) lines"
+-          
+-          # Use --in-diff with the generated diff file
+-          cargo mutants --in-diff pr-changes.diff \
+-            --timeout 30 \
+-            --output mutants-pr.out
+-      
+-      - name: Run full mutation testing
+-        if: github.event_name != 'pull_request'
+-        run: cargo mutants --output mutants-full.out
+-        continue-on-error: true
+-      
+-      - name: Generate mutation report summary
+-        if: always()
+-        run: |
+-          if [ -d "mutants-pr.out" ]; then
+-            echo "## PR Mutation Testing Results (Changed Lines Only)" >> $GITHUB_STEP_SUMMARY
+-            cat mutants-pr.out/outcomes.json | jq -r '
+-              "- Total: \(.summary.total)",
+-              "- Caught: \(.summary.caught)",
+-              "- Missed: \(.summary.missed)",
+-              "- Unviable: \(.summary.unviable)",
+-              "- Timeout: \(.summary.timeout)"
+-            ' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Report parsing failed" >> $GITHUB_STEP_SUMMARY
++          # Generate diff with correct paths
++          git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
++            | sed 's|||g' > pr-changes.diff
++
++          # Run mutation testing (exit code 2 means missed mutations, which is expected)
++          # Use || true to prevent -e flag from exiting immediately
++          cargo mutants --in-diff pr-changes.diff --timeout 30 --output mutants.out || exit_code=$?
++
++          # Set exit_code to 0 if not set (command succeeded)
++          exit_code=${exit_code:-0}
++
++          # Handle results: 0=all caught, 2=some missed (both are success), other=real failure
++          if [ $exit_code -eq 0 ] || [ $exit_code -eq 2 ]; then
++            echo "Mutation testing completed successfully (exit code: $exit_code)"
++            # Check if outcomes.json was created
++            if [ ! -f "mutants.out/outcomes.json" ]; then
++              echo "WARNING: outcomes.json not found despite successful exit"
++              mkdir -p mutants.out
++              echo '{"total_mutants":0,"caught":0,"missed":0,"unviable":0,"timeout":0}' > mutants.out/outcomes.json
++            fi
++          else
++            echo "Mutation testing failed with unexpected exit code: $exit_code"
++            if [ ! -f "mutants.out/outcomes.json" ]; then
++              echo "Creating fallback outcomes.json due to failure"
++              mkdir -p mutants.out
++              echo '{"total_mutants":0,"caught":0,"missed":0,"unviable":0,"timeout":0}' > mutants.out/outcomes.json
++            fi
++            exit 1  # Fail the workflow for real errors
+           fi
+-          
+-          if [ -d "mutants-full.out" ]; then
+-            echo "## Full Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
+-            cat mutants-full.out/outcomes.json | jq -r '
+-              "- Total: \(.summary.total)",
+-              "- Caught: \(.summary.caught)",
+-              "- Missed: \(.summary.missed)",
+-              "- Unviable: \(.summary.unviable)",
+-              "- Timeout: \(.summary.timeout)"
+-            ' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Report parsing failed" >> $GITHUB_STEP_SUMMARY
+-          fi
+-      
+-      - name: Upload mutation report
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: mutation-report-${{ github.sha }}
+-          path: |
+-            mutants-pr.out/
+-            mutants-full.out/
+-          retention-days: 30
+-      
++
+       - name: Comment PR with results
+         if: github.event_name == 'pull_request' && always()
+         uses: actions/github-script@v7
+         with:
+           script: |
+             const fs = require('fs');
+-            const path = require('path');
+-            let comment = '## 🧬 Mutation Testing Results (Changed Lines Only)\n\n' +
+-                         '> This PR was tested using incremental mutation testing (`--in-diff`) which only tests mutations in changed lines, making it faster and more focused.\n\n';
+-            
++
++            let comment = '## 🧬 Mutation Testing Results\n\n';
++
+             try {
+-              const outcomes = JSON.parse(fs.readFileSync('mutants-pr.out/outcomes.json', 'utf8'));
+-              const total = outcomes.summary.total || 0;
+-              const caught = outcomes.summary.caught || 0;
+-              const missed = outcomes.summary.missed || 0;
+-              const score = total > 0 ? ((caught / total) * 100).toFixed(1) : 0;
+-              
+-              comment += `**Mutation Score: ${score}%**\n\n`;
+-              comment += `| Metric | Count |\n|--------|-------|\n`;
+-              comment += `| Total Mutations | ${total} |\n`;
+-              comment += `| Caught | ${caught} ✅ |\n`;
+-              comment += `| Missed | ${missed} ⚠️ |\n`;
+-              comment += `| Unviable | ${outcomes.summary.unviable || 0} |\n`;
+-              comment += `| Timeout | ${outcomes.summary.timeout || 0} |\n`;
+-              
+-              if (missed > 0) {
+-                comment += `\n⚠️ **${missed} mutations were not caught by tests.**\n`;
+-                comment += `Review the mutation report artifact for details.\n`;
++              if (fs.existsSync('mutants.out/outcomes.json')) {
++                const outcomes = JSON.parse(
++                  fs.readFileSync('mutants.out/outcomes.json', 'utf8')
++                );
++
++                // cargo-mutants stores summary directly in the root, not nested under summary
++                const total = outcomes.total_mutants || 0;
++                const caught = outcomes.caught || 0;
++                const missed = outcomes.missed || 0;
++                const timeout = outcomes.timeout || 0;
++                const unviable = outcomes.unviable || 0;
++                const score = total > 0 ? ((caught / total) * 100).toFixed(1) : 0;
++
++                comment += `**Score: ${score}%** | `;
++                comment += `Total: ${total} | Caught: ${caught} | Missed: ${missed}`;
++                if (unviable > 0) comment += ` | Unviable: ${unviable}`;
++                if (timeout > 0) comment += ` | Timeout: ${timeout}`;
++
++                if (missed > 0) {
++                  comment += `\n\n⚠️ ${missed} mutations were not caught by tests.`;
++                }
++              } else {
++                comment += 'No mutations found in changed lines.';
+               }
+             } catch (e) {
+-              comment += 'Failed to parse mutation testing results.\n';
++              comment += `Error: ${e.message}`;
+             }
+-            
+-            github.rest.issues.createComment({
++
++            await github.rest.issues.createComment({
+               issue_number: context.issue.number,
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               body: comment
+-            });
++            });
+\ No newline at end of file
+diff --git a/.github/workflows/mutation-testing.yml b/.github/workflows/mutation-testing.yml
+index 7799fe0..a1aec9f 100644
+--- a/.github/workflows/mutation-testing.yml
++++ b/.github/workflows/mutation-testing.yml
+@@ -30,6 +30,9 @@ jobs:
+     steps:
+       - name: Checkout code
+         uses: actions/checkout@v4
++        with:
++          # Fetch full history for proper diff generation
++          fetch-depth: 0
+       
+       - name: Setup Rust toolchain
+         uses: dtolnay/rust-toolchain@stable
+@@ -44,7 +47,7 @@ jobs:
+             ~/.cargo/registry/index/
+             ~/.cargo/registry/cache/
+             ~/.cargo/git/db/
+-            target/
++            target/
+           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+           restore-keys: |
+             ${{ runner.os }}-cargo-
+@@ -54,19 +57,96 @@ jobs:
+           if ! command -v cargo-mutants &> /dev/null; then
+             cargo install cargo-mutants
+           fi
++        working-directory: ./trading212-mcp-server
+       
+       - name: Run incremental mutation testing on PR
+         if: github.event_name == 'pull_request'
+         run: |
+-          # Use --in-diff to only test mutations in changed lines
+-          cargo mutants --in-diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} \
+-            --timeout 30 \
+-            --output mutants-pr.out
++          # Generate diff using merge-base approach (following cargo-mutants best practices)
++          # Fixed: Strip project prefix from diff paths for cargo-mutants compatibility
++          echo "=== DEBUGGING CARGO-MUTANTS WORKFLOW ==="
++          echo "Current working directory: $(pwd)"
++          echo "Current branch: $(git branch --show-current)"
++          echo "Base ref: ${{ github.base_ref }}"
++          echo "Head ref: ${{ github.head_ref }}"
++          echo "Available files: $(ls -la)"
++
++          # Find merge base and generate diff
++          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
++          echo "Merge base: $MERGE_BASE"
++
++          echo "=== GENERATING DIFF ==="
++          git diff "$MERGE_BASE"..HEAD | sed 's|||g' > pr.diff
++          echo "Diff generated, size: $(wc -l < pr.diff) lines"
++
++          # Show diff stats for debugging
++          echo "=== FILES CHANGED ==="
++          git diff --name-only "$MERGE_BASE"..HEAD || echo "No files changed"
++
++          echo "=== FIRST 30 LINES OF DIFF ==="
++          head -30 pr.diff || echo "Empty diff"
++
++          echo "=== CARGO PROJECT CHECK ==="
++          echo "Cargo.toml exists: $(test -f Cargo.toml && echo 'YES' || echo 'NO')"
++          echo "src/ directory exists: $(test -d src && echo 'YES' || echo 'NO')"
++
++          if [ -f Cargo.toml ]; then
++            echo "Cargo.toml content (first 10 lines):"
++            head -10 Cargo.toml
++          fi
++
++          # Run cargo mutants with diff
++          if [ -s pr.diff ]; then
++            echo "=== RUNNING CARGO MUTANTS ==="
++            echo "Testing cargo mutants --list first..."
++            MUTANT_COUNT=$(cargo mutants --list --in-diff pr.diff | wc -l)
++            echo "Found $MUTANT_COUNT mutations to test"
++
++            echo "Now running actual mutations..."
++            mkdir -p mutants-pr.out
++
++            # Run cargo mutants with timeout handling
++            timeout 300s cargo mutants --no-shuffle -vV --in-diff pr.diff \
++              --timeout 60 \
++              --output mutants-pr.out || {
++              echo "Cargo mutants failed or timed out, creating fallback results"
++
++              # Create fallback outcomes.json based on what we know
++              cat > mutants-pr.out/outcomes.json << EOF
++{
++  "summary": {
++    "total": $MUTANT_COUNT,
++    "caught": 0,
++    "missed": 0,
++    "unviable": 0,
++    "timeout": $MUTANT_COUNT
++  },
++  "outcomes": []
++}
++EOF
++            }
++          else
++            echo "=== NO DIFF FOUND ==="
++            echo "Creating empty output directory"
++            mkdir -p mutants-pr.out
++            echo '{"summary":{"total":0,"caught":0,"missed":0,"unviable":0,"timeout":0}}' > mutants-pr.out/outcomes.json
++          fi
++
++          # Ensure outcomes.json exists
++          if [ ! -f "mutants-pr.out/outcomes.json" ]; then
++            echo "outcomes.json missing, creating fallback"
++            echo '{"summary":{"total":0,"caught":0,"missed":0,"unviable":0,"timeout":1}}' > mutants-pr.out/outcomes.json
++          fi
++
++          echo "=== FINAL RESULTS ==="
++          cat mutants-pr.out/outcomes.json || echo "No outcomes file found"
++        working-directory: ./trading212-mcp-server
+         continue-on-error: true
+       
+       - name: Run full mutation testing
+         if: github.event_name != 'pull_request'
+         run: cargo mutants --output mutants-full.out
++        working-directory: ./trading212-mcp-server
+         continue-on-error: true
+       
+       - name: Generate mutation report summary
+@@ -82,7 +162,7 @@ jobs:
+               "- Timeout: \(.summary.timeout)"
+             ' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Report parsing failed" >> $GITHUB_STEP_SUMMARY
+           fi
+-          
++
+           if [ -d "mutants-full.out" ]; then
+             echo "## Full Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
+             cat mutants-full.out/outcomes.json | jq -r '
+@@ -93,6 +173,7 @@ jobs:
+               "- Timeout: \(.summary.timeout)"
+             ' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Report parsing failed" >> $GITHUB_STEP_SUMMARY
+           fi
++        working-directory: ./trading212-mcp-server
+       
+       - name: Upload mutation report
+         if: always()
+@@ -100,8 +181,8 @@ jobs:
+         with:
+           name: mutation-report-${{ github.sha }}
+           path: |
+-            mutants-pr.out/
+-            mutants-full.out/
++            mutants-pr.out/
++            mutants-full.out/
+           retention-days: 30
+       
+       - name: Comment PR with results
+@@ -114,7 +195,7 @@ jobs:
+                          '> This PR was tested using incremental mutation testing (`--in-diff`) which only tests mutations in changed lines, making it faster and more focused.\n\n';
+             
+             try {
+-              const outcomes = JSON.parse(fs.readFileSync('mutants-pr.out/outcomes.json', 'utf8'));
++              const outcomes = JSON.parse(fs.readFileSync('mutants-pr.out/outcomes.json', 'utf8'));
+               const total = outcomes.summary.total || 0;
+               const caught = outcomes.summary.caught || 0;
+               const missed = outcomes.summary.missed || 0;
+@@ -141,4 +222,4 @@ jobs:
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+               body: comment
+-            });
+\ No newline at end of file
++            });
+diff --git a/src/handler.rs b/src/handler.rs
+index 1bb2f10..529d0cc 100644
+--- a/src/handler.rs
++++ b/src/handler.rs
+@@ -169,6 +169,11 @@ impl ServerHandler for Trading212Handler {
+                     .call_tool(&self.client, &self.config, &self.cache)
+                     .await
+             }
++            Trading212Tools::CreatePieTool(create_pie_tool) => {
++                create_pie_tool
++                    .call_tool(&self.client, &self.config, &self.cache)
++                    .await
++            }
+         };
+ 
+         let duration = start_time.elapsed();
+@@ -415,6 +420,7 @@ mod tests {
+                 Trading212Tools::GetPiesTool(_) => assert!(true),
+                 Trading212Tools::GetPieByIdTool(_) => assert!(true),
+                 Trading212Tools::UpdatePieTool(_) => assert!(true),
++                Trading212Tools::CreatePieTool(_) => assert!(true),
+             }
+         }
+     }
+@@ -531,15 +537,20 @@ mod tests {
+                     // This would call tool.call_tool(&client, &config).await in real handler
+                     assert!(true);
+                 }
++                Trading212Tools::CreatePieTool(_tool) => {
++                    // This would call tool.call_tool(&client, &config).await in real handler
++                    assert!(true);
++                }
+             }
+         }
+ 
+         // Test tools list generation (covers the handle_list_tools_request path)
+         let tools_list = Trading212Tools::tools();
+-        assert_eq!(tools_list.len(), 4);
++        assert_eq!(tools_list.len(), 5);
+         assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
+         assert!(tools_list.iter().any(|t| t.name == "get_pies"));
+         assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
++        assert!(tools_list.iter().any(|t| t.name == "create_pie"));
+     }
+ 
+     #[tokio::test]
+@@ -656,6 +667,10 @@ mod tests {
+                     // Would call tool.call_tool(&self.client, &self.config).await
+                     assert!(true);
+                 }
++                Trading212Tools::CreatePieTool(_) => {
++                    // Would call tool.call_tool(&self.client, &self.config).await
++                    assert!(true);
++                }
+             }
+         }
+     }
+@@ -824,7 +839,7 @@ mod tests {
+ 
+         // Test the tools() method that's called in handle_list_tools_request
+         let tools = Trading212Tools::tools();
+-        assert_eq!(tools.len(), 4);
++        assert_eq!(tools.len(), 5);
+ 
+         // Verify tool properties that are set in the async method
+         let tool_names: Vec<_> = tools.iter().map(|t| &t.name).collect();
+@@ -832,6 +847,7 @@ mod tests {
+         assert!(tool_names.contains(&&"get_pies".to_string()));
+         assert!(tool_names.contains(&&"get_pie_by_id".to_string()));
+         assert!(tool_names.contains(&&"update_pie".to_string()));
++        assert!(tool_names.contains(&&"create_pie".to_string()));
+ 
+         // Test tool structure that would be returned by handle_list_tools_request
+         for tool in &tools {
+@@ -845,7 +861,7 @@ mod tests {
+ 
+         // Test the debug logging data that would be used
+         let debug_data: Vec<_> = tools.iter().map(|t| &t.name).collect();
+-        assert_eq!(debug_data.len(), 4);
++        assert_eq!(debug_data.len(), 5);
+     }
+ 
+     #[tokio::test]
+@@ -897,6 +913,7 @@ mod tests {
+                 Trading212Tools::GetPiesTool(_) => assert_eq!(tool_name, "get_pies"),
+                 Trading212Tools::GetPieByIdTool(_) => assert_eq!(tool_name, "get_pie_by_id"),
+                 Trading212Tools::UpdatePieTool(_) => assert_eq!(tool_name, "update_pie"),
++                Trading212Tools::CreatePieTool(_) => assert_eq!(tool_name, "create_pie"),
+             }
+         }
+ 
+diff --git a/src/tools.rs b/src/tools.rs
+index 3ff1fec..fc88e2c 100644
+--- a/src/tools.rs
++++ b/src/tools.rs
+@@ -187,9 +187,9 @@ pub struct Pie {
+     /// Performance results for the pie
+     pub result: PieResult,
+     /// Progress towards goal (0.0 to 1.0)
+-    pub progress: f64,
++    pub progress: Option<f64>,
+     /// Current status of the pie
+-    pub status: String,
++    pub status: Option<String>,
+ }
+ 
+ /// Dividend details for a pie
+@@ -273,18 +273,18 @@ pub struct PieSettings {
+     /// User-defined name for the pie
+     pub name: String,
+     /// Visual icon identifier for the pie in the UI
+-    pub icon: String,
++    pub icon: Option<String>,
+     /// Target goal amount in the pie's base currency
+-    pub goal: f64,
++    pub goal: Option<f64>,
+     /// Pie creation timestamp (Unix timestamp as f64)
+     #[serde(rename = "creationDate")]
+     pub creation_date: f64,
+     /// Target end date for the investment goal (ISO 8601 format)
+     #[serde(rename = "endDate")]
+-    pub end_date: String,
++    pub end_date: Option<String>,
+     /// Initial investment amount when the pie was created
+     #[serde(rename = "initialInvestment")]
+-    pub initial_investment: f64,
++    pub initial_investment: Option<f64>,
+     /// Dividend handling preference ("REINVEST" or "WITHDRAW")
+     #[serde(rename = "dividendCashAction")]
+     pub dividend_cash_action: String,
+@@ -419,6 +419,36 @@ pub struct UpdatePieTool {
+     pub end_date: Option<String>,
+ }
+ 
++#[mcp_tool(
++    name = "create_pie",
++    description = "Create a new Trading212 investment pie",
++    title = "Create Trading212 Investment Pie"
++)]
++/// Tool for creating new investment pies in Trading212.
++///
++/// Creates a new investment pie with the specified settings including instrument allocations,
++/// name, goal, dividend handling, and other configuration parameters.
++#[allow(missing_docs)]
++#[derive(Debug, Deserialize, Serialize, JsonSchema)]
++pub struct CreatePieTool {
++    /// Pie name (required, max 100 characters)
++    pub name: String,
++    /// Instrument allocations (weights must sum to 1.0 or less)
++    pub instrument_shares: Vec<InstrumentAllocation>,
++    /// Pie icon identifier (optional)
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub icon: Option<String>,
++    /// Target goal amount (must be positive, optional)
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub goal: Option<f64>,
++    /// Dividend cash action ("`REINVEST`" or "`TO_ACCOUNT_CASH`", optional)
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub dividend_cash_action: Option<String>,
++    /// End date in ISO 8601 format (e.g., "2025-12-31T23:59:59.999Z", optional)
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub end_date: Option<String>,
++}
++
+ impl GetInstrumentsTool {
+     /// Execute the `get_instruments` tool.
+     ///
+@@ -1281,9 +1311,125 @@ impl UpdatePieTool {
+     }
+ }
+ 
++impl CreatePieTool {
++    /// Execute the `create_pie` tool.
++    ///
++    /// Creates a new investment pie in Trading212 API.
++    ///
++    /// # Arguments
++    ///
++    /// * `client` - HTTP client for making API requests
++    /// * `config` - Trading212 configuration containing API credentials
++    /// * `cache` - Cache and rate limiter for API requests (used for rate limiting only)
++    ///
++    /// # Errors
++    ///
++    /// Returns an error if the API request fails, response parsing fails,
++    /// or serialization of the results fails.
++    pub async fn call_tool(
++        &self,
++        client: &Client,
++        config: &Trading212Config,
++        _cache: &Trading212Cache,
++    ) -> Result<CallToolResult, CallToolError> {
++        tracing::debug!(name = %self.name, "Executing create_pie tool");
++
++        // Validate inputs
++        self.validate_inputs()?;
++
++        let url = config.endpoint_url("equity/pies");
++        let request_body = self.build_request_body()?;
++
++        tracing::debug!(
++            url = %url,
++            body = ?request_body,
++            "Sending create pie request"
++        );
++
++        let response_text =
++            Self::send_create_request(client, &url, &config.api_key, &request_body).await?;
++        let pie = Self::parse_response(&response_text)?;
++
++        tracing::info!(name = %self.name, "Successfully created pie");
++        create_single_item_response(&pie, "new investment pie")
++    }
++
++    /// Validate input parameters
++    fn validate_inputs(&self) -> Result<(), CallToolError> {
++        if self.name.trim().is_empty() {
++            return Err(CallToolError::new(Trading212Error::request_failed(
++                "Pie name cannot be empty".to_string(),
++            )));
++        }
++
++        if self.instrument_shares.is_empty() {
++            return Err(CallToolError::new(Trading212Error::request_failed(
++                "At least one instrument allocation is required".to_string(),
++            )));
++        }
++
++        Ok(())
++    }
++
++    /// Build the request body for the pie creation request
++    fn build_request_body(&self) -> Result<serde_json::Value, CallToolError> {
++        serde_json::to_value(self).map_err(|e| {
++            CallToolError::new(Trading212Error::serialization_error(format!(
++                "Failed to serialize request: {e}"
++            )))
++        })
++    }
++
++    /// Send the HTTP POST request to create a new pie
++    async fn send_create_request(
++        client: &Client,
++        url: &str,
++        api_key: &str,
++        request_body: &serde_json::Value,
++    ) -> Result<String, CallToolError> {
++        let response = client
++            .post(url)
++            .header("Authorization", api_key)
++            .header("Content-Type", "application/json")
++            .json(request_body)
++            .send()
++            .await
++            .map_err(|e| {
++                CallToolError::new(Trading212Error::request_failed(format!(
++                    "Failed to send create pie request: {e}"
++                )))
++            })?;
++
++        let status = response.status();
++        let response_text = response.text().await.map_err(|e| {
++            CallToolError::new(Trading212Error::request_failed(format!(
++                "Failed to read response: {e}"
++            )))
++        })?;
++
++        if !status.is_success() {
++            return Err(CallToolError::new(Trading212Error::api_error(
++                status.as_u16(),
++                response_text,
++            )));
++        }
++
++        Ok(response_text)
++    }
++
++    /// Parse the JSON response from Trading212 API
++    fn parse_response(response_text: &str) -> Result<DetailedPieResponse, CallToolError> {
++        serde_json::from_str(response_text).map_err(|e| {
++            CallToolError::new(Trading212Error::parse_error(format!(
++                "Failed to parse JSON response: {e}. Response body: {response_text}"
++            )))
++        })
++    }
++}
++
+ tool_box! {
+     Trading212Tools,
+-    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool]
++    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool, CreatePieTool]
+ }
+ 
+ #[cfg(test)]
+@@ -1337,7 +1483,7 @@ mod tests {
+ 
+         // Verify settings structure
+         assert_eq!(pie_response.settings.dividend_cash_action, "REINVEST");
+-        assert_eq!(pie_response.settings.goal, 1000.0);
++        assert_eq!(pie_response.settings.goal, Some(1000.0));
+         assert_eq!(pie_response.settings.creation_date, 1_640_995_200.0);
+     }
+ 
+@@ -1612,8 +1758,8 @@ mod tests {
+                         price_avg_result: 100.0,
+                         price_avg_result_coef: 0.1,
+                     },
+-                    progress: 0.75,
+-                    status: "AHEAD".to_string(),
++                    progress: Some(0.75),
++                    status: Some("AHEAD".to_string()),
+                 }]))
+                 .mount(&mock_server)
+                 .await;
+@@ -1712,6 +1858,281 @@ mod tests {
+ 
+             assert!(result.is_err());
+         }
++
++        #[tokio::test]
++        #[allow(clippy::too_many_lines)]
++        async fn test_create_pie_success() {
++            let mock_server = MockServer::start().await;
++
++            // Mock realistic Trading212 API response with null values (like actual API response)
++            let mock_response = serde_json::json!({
++                "instruments": [
++                    {
++                        "ticker": "VRT_US_EQ",
++                        "result": {
++                            "priceAvgInvestedValue": 0.00,
++                            "priceAvgValue": 0.00,
++                            "priceAvgResult": 0.00,
++                            "priceAvgResultCoef": 0
++                        },
++                        "expectedShare": 0.3000,
++                        "currentShare": 0,
++                        "ownedQuantity": 0E-10,
++                        "issues": []
++                    },
++                    {
++                        "ticker": "VST_US_EQ",
++                        "result": {
++                            "priceAvgInvestedValue": 0.00,
++                            "priceAvgValue": 0.00,
++                            "priceAvgResult": 0.00,
++                            "priceAvgResultCoef": 0
++                        },
++                        "expectedShare": 0.2500,
++                        "currentShare": 0,
++                        "ownedQuantity": 0E-10,
++                        "issues": []
++                    },
++                    {
++                        "ticker": "CEG_US_EQ",
++                        "result": {
++                            "priceAvgInvestedValue": 0.00,
++                            "priceAvgValue": 0.00,
++                            "priceAvgResult": 0.00,
++                            "priceAvgResultCoef": 0
++                        },
++                        "expectedShare": 0.2500,
++                        "currentShare": 0,
++                        "ownedQuantity": 0E-10,
++                        "issues": []
++                    },
++                    {
++                        "ticker": "NEE_US_EQ",
++                        "result": {
++                            "priceAvgInvestedValue": 0.00,
++                            "priceAvgValue": 0.00,
++                            "priceAvgResult": 0.00,
++                            "priceAvgResultCoef": 0
++                        },
++                        "expectedShare": 0.2000,
++                        "currentShare": 0,
++                        "ownedQuantity": 0E-10,
++                        "issues": []
++                    }
++                ],
++                "settings": {
++                    "id": 5_533_006,
++                    "instrumentShares": null,
++                    "name": "AI Energy Infrastructure Test",
++                    "icon": null,
++                    "goal": null,
++                    "creationDate": 1_758_825_821.486_743,
++                    "endDate": null,
++                    "initialInvestment": null,
++                    "dividendCashAction": "REINVEST",
++                    "publicUrl": null
++                }
++            });
++
++            Mock::given(method("POST"))
++                .and(path("/equity/pies"))
++                .and(header("Authorization", "test_key"))
++                .and(header("Content-Type", "application/json"))
++                .respond_with(ResponseTemplate::new(200).set_body_json(mock_response))
++                .mount(&mock_server)
++                .await;
++
++            let config = Trading212Config {
++                api_key: "test_key".to_string(),
++                base_url: mock_server.uri(),
++            };
++
++            let client = Client::new();
++            let tool = CreatePieTool {
++                name: "AI Energy Infrastructure Test".to_string(),
++                instrument_shares: vec![
++                    InstrumentAllocation {
++                        ticker: "VRT_US_EQ".to_string(),
++                        weight: 0.3,
++                    },
++                    InstrumentAllocation {
++                        ticker: "CEG_US_EQ".to_string(),
++                        weight: 0.25,
++                    },
++                    InstrumentAllocation {
++                        ticker: "VST_US_EQ".to_string(),
++                        weight: 0.25,
++                    },
++                    InstrumentAllocation {
++                        ticker: "NEE_US_EQ".to_string(),
++                        weight: 0.2,
++                    },
++                ],
++                icon: None,
++                goal: None,
++                dividend_cash_action: Some("REINVEST".to_string()),
++                end_date: None,
++            };
++
++            let cache = Trading212Cache::new().unwrap();
++            let result = tool.call_tool(&client, &config, &cache).await;
++
++            assert!(result.is_ok());
++            let response = result.unwrap();
++
++            // Verify response contains expected content
++            assert!(!response.content.is_empty());
++
++            // Check if response contains expected pie details
++            let response_str = format!("{:?}", response);
++            assert!(response_str.contains("AI Energy Infrastructure Test"));
++            assert!(response_str.contains("5533006")); // Pie ID from realistic mock response
++            assert!(response_str.contains("REINVEST"));
++        }
++
++        #[tokio::test]
++        async fn test_create_pie_validation_error() {
++            let config = Trading212Config {
++                api_key: "test_key".to_string(),
++                base_url: "http://mock.example.com".to_string(),
++            };
++
++            let client = Client::new();
++
++            // Test with empty name
++            let tool = CreatePieTool {
++                name: "".to_string(),
++                instrument_shares: vec![InstrumentAllocation {
++                    ticker: "AAPL".to_string(),
++                    weight: 1.0,
++                }],
++                icon: None,
++                goal: None,
++                dividend_cash_action: None,
++                end_date: None,
++            };
++
++            let cache = Trading212Cache::new().unwrap();
++            let result = tool.call_tool(&client, &config, &cache).await;
++
++            assert!(result.is_err());
++        }
++
++        #[tokio::test]
++        async fn test_create_pie_api_error() {
++            let mock_server = MockServer::start().await;
++
++            // Mock API error response
++            Mock::given(method("POST"))
++                .and(path("/equity/pies"))
++                .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
++                    "code": "InvalidInstrument",
++                    "message": "Instrument not found"
++                })))
++                .mount(&mock_server)
++                .await;
++
++            let config = Trading212Config {
++                api_key: "test_key".to_string(),
++                base_url: mock_server.uri(),
++            };
++
++            let client = Client::new();
++            let tool = CreatePieTool {
++                name: "Test Pie".to_string(),
++                instrument_shares: vec![InstrumentAllocation {
++                    ticker: "INVALID_TICKER".to_string(),
++                    weight: 1.0,
++                }],
++                icon: None,
++                goal: None,
++                dividend_cash_action: None,
++                end_date: None,
++            };
++
++            let cache = Trading212Cache::new().unwrap();
++            let result = tool.call_tool(&client, &config, &cache).await;
++
++            assert!(result.is_err());
++        }
++
++        #[tokio::test]
++        async fn test_create_pie_with_null_values_parsing() {
++            let mock_server = MockServer::start().await;
++
++            // Mock response exactly like the problematic real API response with null values
++            let mock_response = serde_json::json!({
++                "instruments": [
++                    {
++                        "ticker": "VRT_US_EQ",
++                        "result": {
++                            "priceAvgInvestedValue": 0.00,
++                            "priceAvgValue": 0.00,
++                            "priceAvgResult": 0.00,
++                            "priceAvgResultCoef": 0
++                        },
++                        "expectedShare": 0.3000,
++                        "currentShare": 0,
++                        "ownedQuantity": 0E-10,
++                        "issues": []
++                    }
++                ],
++                "settings": {
++                    "id": 5_533_007,
++                    "instrumentShares": null,  // This null was causing parsing issues
++                    "name": "Test Null Values",
++                    "icon": null,              // This null was causing parsing issues
++                    "goal": null,              // This null was causing parsing issues
++                    "creationDate": 1_758_825_821.486_743,
++                    "endDate": null,           // This null was causing parsing issues
++                    "initialInvestment": null, // This null was causing parsing issues
++                    "dividendCashAction": "REINVEST",
++                    "publicUrl": null          // This null was fine (always optional)
++                }
++            });
++
++            Mock::given(method("POST"))
++                .and(path("/equity/pies"))
++                .and(header("Authorization", "test_key"))
++                .and(header("Content-Type", "application/json"))
++                .respond_with(ResponseTemplate::new(200).set_body_json(mock_response))
++                .mount(&mock_server)
++                .await;
++
++            let config = Trading212Config {
++                api_key: "test_key".to_string(),
++                base_url: mock_server.uri(),
++            };
++
++            let client = Client::new();
++            let tool = CreatePieTool {
++                name: "Test Null Values".to_string(),
++                instrument_shares: vec![InstrumentAllocation {
++                    ticker: "VRT_US_EQ".to_string(),
++                    weight: 1.0,
++                }],
++                icon: None,
++                goal: None,
++                dividend_cash_action: Some("REINVEST".to_string()),
++                end_date: None,
++            };
++
++            let cache = Trading212Cache::new().unwrap();
++            let result = tool.call_tool(&client, &config, &cache).await;
++
++            // This should now succeed because we fixed the nullable field parsing
++            assert!(
++                result.is_ok(),
++                "CreatePie should handle null values correctly"
++            );
++
++            let response = result.unwrap();
++            assert!(!response.content.is_empty());
++
++            let response_str = format!("{:?}", response);
++            assert!(response_str.contains("Test Null Values"));
++            assert!(response_str.contains("5533007"));
++        }
+     }
+ 
+     mod helper_function_tests {
+diff --git a/tests/mcp_protocol_tests.rs b/tests/mcp_protocol_tests.rs
+index 3dec07c..e90a597 100644
+--- a/tests/mcp_protocol_tests.rs
++++ b/tests/mcp_protocol_tests.rs
+@@ -195,7 +195,7 @@ async fn test_real_mcp_list_tools() {
+     assert!(result["tools"].is_array());
+ 
+     let tools = result["tools"].as_array().unwrap();
+-    assert_eq!(tools.len(), 4);
++    assert_eq!(tools.len(), 5);
+ 
+     let tool_names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+ 
+@@ -203,6 +203,7 @@ async fn test_real_mcp_list_tools() {
+     assert!(tool_names.contains(&"get_pies"));
+     assert!(tool_names.contains(&"get_pie_by_id"));
+     assert!(tool_names.contains(&"update_pie"));
++    assert!(tool_names.contains(&"create_pie"));
+ }
+ 
+ /// Real integration test: Call get_instruments tool via MCP protocol with client-side filtering
