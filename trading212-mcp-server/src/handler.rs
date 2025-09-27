@@ -51,7 +51,7 @@ impl Trading212Handler {
         let pool_size = std::env::var("TRADING212_POOL_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(4);
+            .unwrap_or(16); // Increased from 4 to 16 for better connection reuse
 
         let timeout_secs = std::env::var("TRADING212_TIMEOUT_SECS")
             .ok()
@@ -61,8 +61,10 @@ impl Trading212Handler {
         let client = Client::builder()
             .user_agent("Trading212-MCP-Server/0.1.0")
             .pool_max_idle_per_host(pool_size)
+            .pool_idle_timeout(std::time::Duration::from_secs(300)) // Keep connections warm for 5 minutes
             .timeout(std::time::Duration::from_secs(timeout_secs))
-            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .tcp_nodelay(true) // Disable Nagle's algorithm for lower latency
+            .tcp_keepalive(std::time::Duration::from_secs(120)) // Increased from 60 to 120 seconds
             .connection_verbose(false)
             .build()
             .map_err(|e| {
