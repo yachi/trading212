@@ -51,7 +51,7 @@ impl Trading212Handler {
         let pool_size = std::env::var("TRADING212_POOL_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(16); // Increased from 4 to 16 for better connection reuse
+            .unwrap_or(16); // 4x pool increase: reduces handshake overhead for concurrent requests
 
         let timeout_secs = std::env::var("TRADING212_TIMEOUT_SECS")
             .ok()
