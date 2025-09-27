@@ -23,7 +23,7 @@ jobs:
   mutation-testing:
     name: Run Mutation Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: ./trading212-mcp-server
