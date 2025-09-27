@@ -27,7 +27,7 @@ use rust_mcp_sdk::{
     macros::{mcp_tool, JsonSchema},
     tool_box,
 };
-use serde::{de, de::Deserializer, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{cache::Trading212Cache, config::Trading212Config, errors::Trading212Error};
@@ -706,85 +706,6 @@ impl GetInstrumentsTool {
     }
 }
 
-/// Streaming visitor for processing JSON arrays without intermediate allocations
-struct StreamingVisitor<'a> {
-    filtered_instruments: &'a mut Vec<Instrument>,
-    processed_count: &'a mut usize,
-    error_count: &'a mut usize,
-    consecutive_errors: &'a mut usize,
-    limit: usize,
-    skip_count: usize,
-    skipped: &'a mut usize,
-    collected: &'a mut usize,
-    tool: &'a GetInstrumentsTool,
-}
-
-impl<'a> de::Visitor<'a> for StreamingVisitor<'a> {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a JSON array of instruments")
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::SeqAccess<'a>,
-    {
-        const MAX_CONSECUTIVE_ERRORS: usize = 50;
-
-        // Process each element in the sequence - direct deserialization to Instrument
-        loop {
-            match seq.next_element::<Instrument>() {
-                Ok(Some(instrument)) => {
-                    *self.processed_count += 1;
-                    *self.consecutive_errors = 0; // Reset on success
-
-                    // Apply filters
-                    if self.tool.matches_filters(&instrument) {
-                        // Apply pagination - skip until we reach the desired page
-                        if *self.skipped < self.skip_count {
-                            *self.skipped += 1;
-                        } else if *self.collected < self.limit {
-                            self.filtered_instruments.push(instrument);
-                            *self.collected += 1;
-                        } else {
-                            // We have enough items for this page, early termination
-                            tracing::debug!("Stopping early: collected {} items", *self.collected);
-                            break;
-                        }
-                    }
-                }
-                Ok(None) => {
-                    // End of sequence
-                    break;
-                }
-                Err(e) => {
-                    *self.error_count += 1;
-                    *self.consecutive_errors += 1;
-
-                    tracing::warn!(
-                        error = %e,
-                        processed_count = *self.processed_count,
-                        error_count = *self.error_count,
-                        consecutive_errors = *self.consecutive_errors,
-                        "Failed to deserialize JSON value to instrument"
-                    );
-
-                    // Prevent runaway errors from corrupted data
-                    if *self.consecutive_errors > MAX_CONSECUTIVE_ERRORS {
-                        return Err(de::Error::custom(format!(
-                            "Too many consecutive parsing errors ({}), JSON may be corrupted",
-                            *self.consecutive_errors
-                        )));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
 impl GetInstrumentsTool {
     /// Stream parse and filter JSON in one pass to minimize memory usage
     #[allow(clippy::cognitive_complexity)]
@@ -800,8 +721,7 @@ impl GetInstrumentsTool {
         // Use true streaming JSON parsing - no intermediate Vec<serde_json::Value> allocation
         // This eliminates double parsing and reduces memory usage by ~40%
         let mut filtered_instruments = Vec::new();
-        let mut processed_count = 0;
-        let mut error_count = 0;
+        let processed_count;
 
         // Calculate pagination parameters
         let limit = self.limit.unwrap_or(100) as usize;
@@ -810,28 +730,33 @@ impl GetInstrumentsTool {
         let mut skipped = 0;
         let mut collected = 0;
 
-        // Optimized approach: Use serde_json::Deserializer for true streaming
-        // This avoids the double parsing: JSON -> Vec<Value> -> Instrument
-        let mut consecutive_errors = 0;
-
         // Create streaming deserializer
         let mut deserializer = serde_json::Deserializer::from_str(json_text);
 
-        // Try streaming approach first, fallback to old method if needed
-        match deserializer.deserialize_seq(StreamingVisitor {
-            filtered_instruments: &mut filtered_instruments,
-            processed_count: &mut processed_count,
-            error_count: &mut error_count,
-            consecutive_errors: &mut consecutive_errors,
-            limit,
-            skip_count,
-            skipped: &mut skipped,
-            collected: &mut collected,
-            tool: self,
-        }) {
-            Ok(_) => {
-                // Streaming completed successfully
-                tracing::debug!("Streaming optimization successful");
+        // Simplified streaming approach: direct deserialization without intermediate Vec<Value>
+        match Vec::<Instrument>::deserialize(&mut deserializer) {
+            Ok(all_instruments) => {
+                tracing::debug!(
+                    "Streaming deserialization successful, {} total instruments",
+                    all_instruments.len()
+                );
+
+                // Apply filtering and pagination after deserialization
+                processed_count = all_instruments.len();
+
+                for instrument in all_instruments {
+                    if self.matches_filters(&instrument) {
+                        if skipped < skip_count {
+                            skipped += 1;
+                        } else if collected < limit {
+                            filtered_instruments.push(instrument);
+                            collected += 1;
+                        } else {
+                            tracing::debug!("Early termination: collected {} items", collected);
+                            break;
+                        }
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -846,38 +771,20 @@ impl GetInstrumentsTool {
 
         tracing::debug!(
             processed_count = processed_count,
-            error_count = error_count,
             filtered_count = filtered_instruments.len(),
             "Streaming parse and filter completed"
         );
-
-        if error_count > 0 {
-            let success_rate = if processed_count > 0 {
-                (processed_count as usize).saturating_sub(error_count as usize) as f64
-                    / processed_count as f64
-                    * 100.0
-            } else {
-                0.0
-            };
-            tracing::warn!(
-                error_count = error_count,
-                success_rate = format!("{:.1}%", success_rate),
-                "Some instruments failed to parse during streaming"
-            );
-        }
-
-        // Check if we failed to parse anything at all - could indicate malformed JSON
-        // Note: Empty arrays are valid - they just mean no instruments match
-        if processed_count == 0 && error_count > 0 {
-            let error = Trading212Error::parse_error("Response appears to be malformed JSON");
-            tracing::error!(error = %error, "Failed to parse any instruments from response");
-            return Err(CallToolError::new(error));
-        }
 
         Ok(filtered_instruments)
     }
 
     /// Fallback to original parsing approach for compatibility
+    #[allow(
+        clippy::cognitive_complexity,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
     fn stream_parse_and_filter_fallback(
         &self,
         json_text: &str,
