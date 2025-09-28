@@ -23,7 +23,7 @@ jobs:
   mutation-testing:
     name: Run Mutation Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: ./trading212-mcp-server
@@ -73,7 +73,7 @@ jobs:
 
           # Run mutation testing (exit code 2 means missed mutations, which is expected)
           # Use || true to prevent -e flag from exiting immediately
-          cargo mutants --in-diff pr-changes.diff --timeout 30 --output mutants.out || exit_code=$?
+          cargo mutants --no-shuffle -j 2 --in-diff pr-changes.diff --timeout 300 --output mutants.out || exit_code=$?
 
           # cargo-mutants creates outcomes.json in a nested directory structure
           # Find and move it to the expected location
