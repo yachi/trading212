@@ -768,6 +768,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_wrap)]
     fn test_calculate_wait_duration() {
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -780,9 +781,8 @@ mod tests {
         let reset_in_10_secs = now + 10;
         let wait = Trading212Cache::calculate_wait_duration(reset_in_10_secs);
         assert!(
-            wait >= 9 && wait <= 11,
-            "Should wait ~10 seconds, got {}",
-            wait
+            (9..=11).contains(&wait),
+            "Should wait ~10 seconds, got {wait}"
         );
 
         // Test 2: Past reset timestamp (should not wait)

@@ -761,7 +761,7 @@ mod tests {
             match tool {
                 Trading212Tools::GetInstrumentsTool(_) => assert_eq!(tool_name, "get_instruments"),
                 Trading212Tools::GetAllPiesWithHoldingsTool(_) => {
-                    assert_eq!(tool_name, "get_all_pies_with_holdings")
+                    assert_eq!(tool_name, "get_all_pies_with_holdings");
                 }
                 Trading212Tools::UpdatePieTool(_) => assert_eq!(tool_name, "update_pie"),
                 Trading212Tools::CreatePieTool(_) => assert_eq!(tool_name, "create_pie"),
