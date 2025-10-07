@@ -195,13 +195,12 @@ async fn test_real_mcp_list_tools() {
     assert!(result["tools"].is_array());
 
     let tools = result["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 4);
 
     let tool_names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
     assert!(tool_names.contains(&"get_instruments"));
-    assert!(tool_names.contains(&"get_pies"));
-    assert!(tool_names.contains(&"get_pie_by_id"));
+    assert!(tool_names.contains(&"get_all_pies_with_holdings"));
     assert!(tool_names.contains(&"update_pie"));
     assert!(tool_names.contains(&"create_pie"));
 }
@@ -361,12 +360,12 @@ async fn test_real_mcp_error_handling() {
     // Debug: Print the actual response\n    println!("Test response: {}", serde_json::to_string_pretty(&response).unwrap());\n    \n    // Check if response contains error information (either as JSON-RPC error or as tool result with error content)\n    let has_error = response["error"].is_object() || \n        (response["result"].is_object() && \n         response["result"]["content"].is_array() && \n         !response["result"]["content"].as_array().unwrap().is_empty());\n    assert!(has_error, "Response should contain error information");
 }
 
-/// Real integration test: Call get_pies tool via MCP protocol
+/// Real integration test: Call get_all_pies_with_holdings tool via MCP protocol
 #[tokio::test]
 async fn test_real_mcp_call_get_pies() {
     let mock_server = MockServer::start().await;
 
-    // Mock successful pies response
+    // Mock successful pies list response
     Mock::given(method("GET"))
         .and(path("/equity/pies"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
@@ -388,6 +387,27 @@ async fn test_real_mcp_call_get_pies() {
                 "status": "AHEAD"
             }
         ])))
+        .mount(&mock_server)
+        .await;
+
+    // Mock pie details response
+    Mock::given(method("GET"))
+        .and(path("/equity/pies/12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "instruments": [{
+                "ticker": "AAPL_US_EQ",
+                "expectedShare": 1.0,
+                "currentShare": 1.0,
+                "ownedQuantity": 10.0
+            }],
+            "settings": {
+                "id": 12345,
+                "name": "Test Pie",
+                "icon": null,
+                "goal": null,
+                "dividendCashAction": "REINVEST"
+            }
+        })))
         .mount(&mock_server)
         .await;
 
@@ -415,13 +435,13 @@ async fn test_real_mcp_call_get_pies() {
         .await
         .expect("Initialize failed");
 
-    // Call get_pies tool
+    // Call get_all_pies_with_holdings tool
     let call_tool_request = json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
         "params": {
-            "name": "get_pies",
+            "name": "get_all_pies_with_holdings",
             "arguments": {}
         }
     });
@@ -442,10 +462,10 @@ async fn test_real_mcp_call_get_pies() {
     let content = result["content"].as_array().unwrap();
     assert!(!content.is_empty());
 
-    // Verify the content contains the expected pie data
+    // Verify the content contains the expected pie data with holdings
     let content_text = content[0]["text"].as_str().unwrap();
     assert!(content_text.contains("12345"));
-    assert!(content_text.contains("1 investment pies"));
+    assert!(content_text.contains("pies with holdings"));
 }
 
 /// Real integration test: Update pie tool via MCP protocol
