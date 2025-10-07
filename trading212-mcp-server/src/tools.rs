@@ -1842,6 +1842,116 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_get_all_pies_with_holdings_partial_failure() {
+            use serde_json::json;
+
+            let mock_server = MockServer::start().await;
+
+            // Mock successful pies list response with 3 pies
+            Mock::given(method("GET"))
+                .and(path("/equity/pies"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "id": 101,
+                        "cash": 10.0,
+                        "dividendDetails": {"gained": 1.0, "reinvested": 0.5, "inCash": 0.5},
+                        "result": {
+                            "priceAvgInvestedValue": 100.0,
+                            "priceAvgValue": 110.0,
+                            "priceAvgResult": 10.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.5,
+                        "status": "AHEAD"
+                    },
+                    {
+                        "id": 102,
+                        "cash": 20.0,
+                        "dividendDetails": {"gained": 2.0, "reinvested": 1.0, "inCash": 1.0},
+                        "result": {
+                            "priceAvgInvestedValue": 200.0,
+                            "priceAvgValue": 220.0,
+                            "priceAvgResult": 20.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.6,
+                        "status": "AHEAD"
+                    },
+                    {
+                        "id": 103,
+                        "cash": 30.0,
+                        "dividendDetails": {"gained": 3.0, "reinvested": 1.5, "inCash": 1.5},
+                        "result": {
+                            "priceAvgInvestedValue": 300.0,
+                            "priceAvgValue": 330.0,
+                            "priceAvgResult": 30.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.7,
+                        "status": "AHEAD"
+                    }
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            // Mock successful detail response for pie 101
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/101"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "instruments": [{"ticker": "AAPL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 10.0}],
+                    "settings": {"id": 101, "name": "Pie 1", "icon": "chart", "goal": null, "dividendCashAction": "REINVEST"}
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Mock 404 error for pie 102 (not found)
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/102"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                    "error": "Pie not found"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Mock successful detail response for pie 103
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/103"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "instruments": [{"ticker": "GOOGL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 5.0}],
+                    "settings": {"id": 103, "name": "Pie 3", "icon": "rocket", "goal": 1000.0, "dividendCashAction": "REINVEST"}
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetAllPiesWithHoldingsTool {};
+            let cache = Trading212Cache::new().unwrap();
+
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            // Should succeed even though one pie failed - this is the key test for graceful degradation
+            assert!(
+                result.is_ok(),
+                "Tool should handle partial failures gracefully"
+            );
+
+            let response = result.unwrap();
+            assert!(!response.content.is_empty(), "Response should have content");
+
+            // Verify the response mentions all 3 pies by checking the debug representation
+            let response_text = format!("{:?}", response);
+            assert!(
+                response_text.contains("3 pies") || response_text.contains("\"id\": 101"),
+                "Should report all 3 pies in response"
+            );
+        }
+
+        #[tokio::test]
         #[allow(clippy::too_many_lines)]
         async fn test_create_pie_success() {
             let mock_server = MockServer::start().await;

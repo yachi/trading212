@@ -766,4 +766,78 @@ mod tests {
             EndpointType::PieDetail
         );
     }
+
+    #[test]
+    fn test_calculate_wait_duration() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Test 1: Future reset timestamp (should wait)
+        let reset_in_10_secs = now + 10;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_10_secs);
+        assert!(
+            wait >= 9 && wait <= 11,
+            "Should wait ~10 seconds, got {}",
+            wait
+        );
+
+        // Test 2: Past reset timestamp (should not wait)
+        let reset_in_past = now - 100;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_past);
+        assert_eq!(wait, 0, "Should not wait for past timestamp");
+
+        // Test 3: Reset timestamp is now (edge case)
+        let reset_now = now;
+        let wait = Trading212Cache::calculate_wait_duration(reset_now);
+        assert!(wait <= 1, "Should wait 0-1 seconds for current timestamp");
+
+        // Test 4: Far future timestamp
+        let reset_in_1_hour = now + 3600;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_1_hour);
+        assert_eq!(wait, 3600, "Should wait 3600 seconds");
+
+        // Test 5: Negative timestamp (edge case - should return 0)
+        let negative_timestamp = -1000;
+        let wait = Trading212Cache::calculate_wait_duration(negative_timestamp);
+        assert_eq!(wait, 0, "Should not wait for negative timestamp");
+
+        // Test 6: Very large future timestamp
+        let reset_in_future = now + 1_000_000;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_future);
+        assert_eq!(wait, 1_000_000, "Should calculate large wait duration");
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_rate_limit_reset_non_pie_endpoint() {
+        let cache = Trading212Cache::new().expect("Failed to create cache");
+
+        // Non-pie endpoint should return immediately without waiting
+        let start = std::time::Instant::now();
+        cache.wait_for_rate_limit_reset("equity/instruments").await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 10,
+            "Should return immediately for non-pie endpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_rate_limit_reset_no_timestamp() {
+        let cache = Trading212Cache::new().expect("Failed to create cache");
+
+        // Pie endpoint but no stored timestamp should return immediately
+        let start = std::time::Instant::now();
+        cache.wait_for_rate_limit_reset("equity/pies").await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 10,
+            "Should return immediately when no reset timestamp stored"
+        );
+    }
 }
