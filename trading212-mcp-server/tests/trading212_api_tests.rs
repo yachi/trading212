@@ -138,56 +138,6 @@ async fn test_get_instruments_tool_execution() {
 }
 
 #[tokio::test]
-async fn test_get_pies_tool_execution() {
-    let (handler, mock_server) = create_test_handler_with_mock_api().await;
-
-    // Mock successful pies response
-    Mock::given(method("GET"))
-        .and(path("/equity/pies"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {
-                "id": 12345,
-                "cash": 100.0,
-                "dividendDetails": {
-                    "gained": 5.0,
-                    "reinvested": 4.0,
-                    "inCash": 1.0
-                },
-                "result": {
-                    "priceAvgInvestedValue": 1000.0,
-                    "priceAvgValue": 1100.0,
-                    "priceAvgResult": 100.0,
-                    "priceAvgResultCoef": 0.1
-                },
-                "progress": 0.75,
-                "status": "AHEAD"
-            }
-        ])))
-        .mount(&mock_server)
-        .await;
-
-    // Test via handler's call_tool_request method
-    let call_params = CallToolRequestParams {
-        name: "get_pies".to_string(),
-        arguments: Some(Map::new()),
-    };
-
-    let result = Trading212Tools::try_from(call_params).expect("Tool conversion should succeed");
-
-    match result {
-        Trading212Tools::GetPiesTool(tool) => {
-            let tool_result = tool
-                .call_tool(&handler.client, &handler.config, &handler.cache)
-                .await;
-            assert!(tool_result.is_ok());
-            let content = tool_result.unwrap();
-            assert!(!content.content.is_empty());
-        }
-        _ => panic!("Expected GetPiesTool"),
-    }
-}
-
-#[tokio::test]
 async fn test_api_error_handling() {
     let (handler, mock_server) = create_test_handler_with_mock_api().await;
 

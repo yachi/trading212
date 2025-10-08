@@ -156,13 +156,8 @@ impl ServerHandler for Trading212Handler {
                     .call_tool(&self.client, &self.config, &self.cache)
                     .await
             }
-            Trading212Tools::GetPiesTool(get_pies_tool) => {
-                get_pies_tool
-                    .call_tool(&self.client, &self.config, &self.cache)
-                    .await
-            }
-            Trading212Tools::GetPieByIdTool(get_pie_by_id_tool) => {
-                get_pie_by_id_tool
+            Trading212Tools::GetAllPiesWithHoldingsTool(get_all_pies_with_holdings_tool) => {
+                get_all_pies_with_holdings_tool
                     .call_tool(&self.client, &self.config, &self.cache)
                     .await
             }
@@ -366,7 +361,7 @@ mod tests {
     #[test]
     fn test_tool_creation_and_properties() {
         // Test creating individual tool instances
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
+        use crate::tools::GetInstrumentsTool;
 
         // Test GetInstrumentsTool creation
         let instruments_tool = GetInstrumentsTool {
@@ -377,68 +372,6 @@ mod tests {
         };
         assert_eq!(instruments_tool.search, Some("AAPL".to_string()));
         assert_eq!(instruments_tool.instrument_type, Some("STOCK".to_string()));
-
-        // Test GetPiesTool creation
-        let pies_tool = GetPiesTool {};
-        // Just verify it exists and can be created (GetPiesTool is a unit struct)
-        assert_eq!(std::mem::size_of_val(&pies_tool), 0);
-
-        // Test GetPieByIdTool creation
-        let pie_by_id_tool = GetPieByIdTool { pie_id: 123 };
-        assert_eq!(pie_by_id_tool.pie_id, 123);
-    }
-
-    #[test]
-    fn test_tool_enum_variants() {
-        // Test that we can create all Trading212Tools variants
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool, UpdatePieTool};
-
-        let instruments_tool = GetInstrumentsTool::default();
-        let pies_tool = GetPiesTool {};
-        let pie_by_id_tool = GetPieByIdTool { pie_id: 42 };
-        let update_pie_tool = UpdatePieTool {
-            pie_id: 12345,
-            instrument_shares: None,
-            name: Some("Test Update".to_string()),
-            icon: None,
-            goal: None,
-            dividend_cash_action: None,
-            end_date: None,
-        };
-
-        let tool_variants = vec![
-            Trading212Tools::GetInstrumentsTool(instruments_tool),
-            Trading212Tools::GetPiesTool(pies_tool),
-            Trading212Tools::GetPieByIdTool(pie_by_id_tool),
-            Trading212Tools::UpdatePieTool(update_pie_tool),
-        ];
-
-        assert_eq!(tool_variants.len(), 4);
-
-        // Verify each variant can be matched
-        for tool in tool_variants {
-            match tool {
-                Trading212Tools::GetInstrumentsTool(_) => assert!(true),
-                Trading212Tools::GetPiesTool(_) => assert!(true),
-                Trading212Tools::GetPieByIdTool(_) => assert!(true),
-                Trading212Tools::UpdatePieTool(_) => assert!(true),
-                Trading212Tools::CreatePieTool(_) => assert!(true),
-            }
-        }
-    }
-
-    #[test]
-    fn test_tool_parameter_validation() {
-        // Test tool parameter validation logic
-        use crate::tools::GetPieByIdTool;
-
-        // Test valid pie ID ranges
-        let valid_tool = GetPieByIdTool { pie_id: 12345 };
-        assert!(valid_tool.pie_id > 0);
-
-        // Test that pie_id can handle large numbers
-        let large_id_tool = GetPieByIdTool { pie_id: 999_999 };
-        assert!(large_id_tool.pie_id > 0);
     }
 
     #[test]
@@ -495,63 +428,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_tool_execution_real_world_simulation() {
-        // Test the async tool execution paths that are covered by the ServerHandler methods
-        let _handler = create_test_handler();
-
-        // Test tool creation and execution through the Trading212Tools enum
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
-
-        // Test each tool variant creation and basic validation
-        let instruments_tool = GetInstrumentsTool {
-            search: Some("AAPL".to_string()),
-            instrument_type: Some("STOCK".to_string()),
-            limit: None,
-            page: None,
-        };
-
-        let pies_tool = GetPiesTool {};
-
-        let pie_by_id_tool = GetPieByIdTool { pie_id: 12345 };
-
-        // Test that we can create Trading212Tools enum variants
-        let tool_variants = vec![
-            Trading212Tools::GetInstrumentsTool(instruments_tool),
-            Trading212Tools::GetPiesTool(pies_tool),
-            Trading212Tools::GetPieByIdTool(pie_by_id_tool),
-        ];
-
-        // Test that the variants can be processed (simulating the match in handle_call_tool_request)
-        for tool_variant in tool_variants {
-            match tool_variant {
-                Trading212Tools::GetInstrumentsTool(_tool) => {
-                    // This would call tool.call_tool(&client, &config).await in real handler
-                    assert!(true);
-                }
-                Trading212Tools::GetPiesTool(_tool) => {
-                    // This would call tool.call_tool(&client, &config).await in real handler
-                    assert!(true);
-                }
-                Trading212Tools::GetPieByIdTool(_tool) => {
-                    // This would call tool.call_tool(&client, &config).await in real handler
-                    assert!(true);
-                }
-                Trading212Tools::UpdatePieTool(_tool) => {
-                    // This would call tool.call_tool(&client, &config).await in real handler
-                    assert!(true);
-                }
-                Trading212Tools::CreatePieTool(_tool) => {
-                    // This would call tool.call_tool(&client, &config).await in real handler
-                    assert!(true);
-                }
-            }
-        }
-
         // Test tools list generation (covers the handle_list_tools_request path)
         let tools_list = Trading212Tools::tools();
-        assert_eq!(tools_list.len(), 5);
+        assert_eq!(tools_list.len(), 4);
         assert!(tools_list.iter().any(|t| t.name == "get_instruments"));
-        assert!(tools_list.iter().any(|t| t.name == "get_pies"));
-        assert!(tools_list.iter().any(|t| t.name == "get_pie_by_id"));
+        assert!(tools_list
+            .iter()
+            .any(|t| t.name == "get_all_pies_with_holdings"));
+        assert!(tools_list.iter().any(|t| t.name == "update_pie"));
         assert!(tools_list.iter().any(|t| t.name == "create_pie"));
     }
 
@@ -634,10 +518,9 @@ mod tests {
         // Test that client is properly configured (has user agent)
         assert!(std::mem::size_of_val(&handler.client) > 0);
 
-        // Simulate the logic from handle_call_tool_request to test all tool variants
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool};
+        // Test that basic tool variants can be created
+        use crate::tools::GetInstrumentsTool;
 
-        // Test each tool type that would be called in the handler
         let instruments_tool = Trading212Tools::GetInstrumentsTool(GetInstrumentsTool {
             search: Some("TEST".to_string()),
             instrument_type: None,
@@ -645,34 +528,20 @@ mod tests {
             page: None,
         });
 
-        let pies_tool = Trading212Tools::GetPiesTool(GetPiesTool {});
-
-        let pie_by_id_tool = Trading212Tools::GetPieByIdTool(GetPieByIdTool { pie_id: 123 });
-
-        // Test that each tool variant can be matched (simulating the match in handle_call_tool_request)
-        let tools = vec![instruments_tool, pies_tool, pie_by_id_tool];
-        for tool in tools {
-            match tool {
-                Trading212Tools::GetInstrumentsTool(_) => {
-                    // Would call tool.call_tool(&self.client, &self.config).await
-                    assert!(true);
-                }
-                Trading212Tools::GetPiesTool(_) => {
-                    // Would call tool.call_tool(&self.client, &self.config).await
-                    assert!(true);
-                }
-                Trading212Tools::GetPieByIdTool(_) => {
-                    // Would call tool.call_tool(&self.client, &self.config).await
-                    assert!(true);
-                }
-                Trading212Tools::UpdatePieTool(_) => {
-                    // Would call tool.call_tool(&self.client, &self.config).await
-                    assert!(true);
-                }
-                Trading212Tools::CreatePieTool(_) => {
-                    // Would call tool.call_tool(&self.client, &self.config).await
-                    assert!(true);
-                }
+        // Test that the variant can be matched (simulating the match in handle_call_tool_request)
+        match instruments_tool {
+            Trading212Tools::GetInstrumentsTool(_) => {
+                // Would call tool.call_tool(&self.client, &self.config).await
+                assert!(true);
+            }
+            Trading212Tools::GetAllPiesWithHoldingsTool(_) => {
+                assert!(false);
+            }
+            Trading212Tools::UpdatePieTool(_) => {
+                assert!(false);
+            }
+            Trading212Tools::CreatePieTool(_) => {
+                assert!(false);
             }
         }
     }
@@ -742,7 +611,7 @@ mod tests {
         let handler = create_test_handler();
 
         // Test each tool variant's async call pattern (simulating the match arms)
-        use crate::tools::{GetInstrumentsTool, GetPieByIdTool, GetPiesTool, UpdatePieTool};
+        use crate::tools::{GetInstrumentsTool, UpdatePieTool};
 
         // Test GetInstrumentsTool pattern
         let instruments_tool = GetInstrumentsTool {
@@ -754,20 +623,6 @@ mod tests {
 
         // This will fail because we don't have a real API, but tests the async call pattern
         let result = instruments_tool
-            .call_tool(&handler.client, &handler.config, &handler.cache)
-            .await;
-        assert!(result.is_err());
-
-        // Test GetPiesTool pattern
-        let pies_tool = GetPiesTool {};
-        let result = pies_tool
-            .call_tool(&handler.client, &handler.config, &handler.cache)
-            .await;
-        assert!(result.is_err());
-
-        // Test GetPieByIdTool pattern
-        let pie_by_id_tool = GetPieByIdTool { pie_id: 123 };
-        let result = pie_by_id_tool
             .call_tool(&handler.client, &handler.config, &handler.cache)
             .await;
         assert!(result.is_err());
@@ -841,13 +696,12 @@ mod tests {
 
         // Test the tools() method that's called in handle_list_tools_request
         let tools = Trading212Tools::tools();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 4);
 
         // Verify tool properties that are set in the async method
         let tool_names: Vec<_> = tools.iter().map(|t| &t.name).collect();
         assert!(tool_names.contains(&&"get_instruments".to_string()));
-        assert!(tool_names.contains(&&"get_pies".to_string()));
-        assert!(tool_names.contains(&&"get_pie_by_id".to_string()));
+        assert!(tool_names.contains(&&"get_all_pies_with_holdings".to_string()));
         assert!(tool_names.contains(&&"update_pie".to_string()));
         assert!(tool_names.contains(&&"create_pie".to_string()));
 
@@ -863,7 +717,7 @@ mod tests {
 
         // Test the debug logging data that would be used
         let debug_data: Vec<_> = tools.iter().map(|t| &t.name).collect();
-        assert_eq!(debug_data.len(), 5);
+        assert_eq!(debug_data.len(), 4);
     }
 
     #[tokio::test]
@@ -878,12 +732,6 @@ mod tests {
             ("get_instruments", {
                 let mut args = Map::new();
                 args.insert("search".to_string(), json!("AAPL"));
-                args
-            }),
-            ("get_pies", Map::new()),
-            ("get_pie_by_id", {
-                let mut args = Map::new();
-                args.insert("pie_id".to_string(), json!(123));
                 args
             }),
             ("update_pie", {
@@ -912,8 +760,9 @@ mod tests {
             let tool = result.unwrap();
             match tool {
                 Trading212Tools::GetInstrumentsTool(_) => assert_eq!(tool_name, "get_instruments"),
-                Trading212Tools::GetPiesTool(_) => assert_eq!(tool_name, "get_pies"),
-                Trading212Tools::GetPieByIdTool(_) => assert_eq!(tool_name, "get_pie_by_id"),
+                Trading212Tools::GetAllPiesWithHoldingsTool(_) => {
+                    assert_eq!(tool_name, "get_all_pies_with_holdings");
+                }
                 Trading212Tools::UpdatePieTool(_) => assert_eq!(tool_name, "update_pie"),
                 Trading212Tools::CreatePieTool(_) => assert_eq!(tool_name, "create_pie"),
             }

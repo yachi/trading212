@@ -3,7 +3,11 @@
 //! This module provides automatic rate limiting and response caching to respect
 //! Trading212's API limits and improve performance by avoiding redundant requests.
 
-use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use std::{
+    num::NonZeroU32,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 /// Single request burst limit for rate limiters
 const ONE: NonZeroU32 = NonZeroU32::MIN;
@@ -12,14 +16,16 @@ use governor::{clock::QuantaClock, state::NotKeyed, Quota, RateLimiter};
 use moka::future::Cache;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
+use tokio::sync::Mutex;
 
 use crate::{config::Trading212Config, errors::Trading212Error};
 
 // Rate limits based on Trading212 API documentation
 // https://t212public-api-docs.redoc.ly/
+// NOTE: Trading212 applies rate limits PER ACCOUNT, not per endpoint
+// So endpoints in the same category share the same rate budget
 const INSTRUMENTS_RATE_LIMIT_SECS: u64 = 50; // Strictest limit
-const PIES_LIST_RATE_LIMIT_SECS: u64 = 30;
-const PIE_DETAIL_RATE_LIMIT_SECS: u64 = 5;
+const PIES_RATE_LIMIT_SECS: u64 = 2; // Shared by get_pies and get_pie_by_id (conservative 2s to avoid 429 on sequential calls)
 const ACCOUNT_RATE_LIMIT_SECS: u64 = 30;
 const ORDERS_RATE_LIMIT_SECS: u64 = 5;
 
@@ -27,6 +33,9 @@ const ORDERS_RATE_LIMIT_SECS: u64 = 5;
 const INSTRUMENTS_CACHE_TTL_SECS: u64 = 60; // 60s TTL for 50s rate limit
 const PIES_CACHE_TTL_SECS: u64 = 40; // 40s TTL for 30s rate limit
 const DETAIL_CACHE_TTL_SECS: u64 = 15; // 15s TTL for 5s rate limit
+
+// Maximum time to wait for rate limit reset (prevent indefinite hangs)
+const MAX_RATE_LIMIT_WAIT_SECS: u64 = 300; // 5 minutes
 
 /// Endpoint classification for routing to appropriate cache and rate limiter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,12 +128,16 @@ pub struct Trading212Cache {
     pie_detail_cache: Cache<CacheKey, String>,
     account_cache: Cache<CacheKey, String>,
     orders_cache: Cache<CacheKey, String>,
-    /// Rate limiters for different endpoints  
+    /// Rate limiters for different endpoint categories
+    /// NOTE: `pies_limiter` is shared by both `get_pies` and `get_pie_by_id`
+    /// because Trading212 applies rate limits per account
     instruments_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
     pies_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
-    pie_detail_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
     account_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
     orders_limiter: Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>>,
+    /// Unix timestamp from x-ratelimit-reset header, stored when x-ratelimit-remaining=0.
+    /// Used to wait until the exact API-specified reset time before making next pie request.
+    pies_rate_limit_reset: Arc<Mutex<Option<i64>>>,
 }
 
 impl Trading212Cache {
@@ -138,11 +151,10 @@ impl Trading212Cache {
         let instruments_limits = EndpointLimits::from_seconds(INSTRUMENTS_RATE_LIMIT_SECS);
         let instruments_limiter = Arc::new(Self::create_limiter(&instruments_limits)?);
 
-        let pies_limits = EndpointLimits::from_seconds(PIES_LIST_RATE_LIMIT_SECS);
+        // Shared rate limiter for all pie endpoints (get_pies and get_pie_by_id)
+        // Trading212 applies account-wide rate limits, not per-endpoint
+        let pies_limits = EndpointLimits::from_seconds(PIES_RATE_LIMIT_SECS);
         let pies_limiter = Arc::new(Self::create_limiter(&pies_limits)?);
-
-        let pie_detail_limits = EndpointLimits::from_seconds(PIE_DETAIL_RATE_LIMIT_SECS);
-        let pie_detail_limiter = Arc::new(Self::create_limiter(&pie_detail_limits)?);
 
         let account_limits = EndpointLimits::from_seconds(ACCOUNT_RATE_LIMIT_SECS);
         let account_limiter = Arc::new(Self::create_limiter(&account_limits)?);
@@ -184,9 +196,9 @@ impl Trading212Cache {
             orders_cache,
             instruments_limiter,
             pies_limiter,
-            pie_detail_limiter,
             account_limiter,
             orders_limiter,
+            pies_rate_limit_reset: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -219,8 +231,8 @@ impl Trading212Cache {
         endpoint: &str,
     ) -> Arc<RateLimiter<NotKeyed, governor::state::InMemoryState, QuantaClock>> {
         match EndpointType::from_path(endpoint) {
-            EndpointType::PieDetail => self.pie_detail_limiter.clone(),
-            EndpointType::PiesList => self.pies_limiter.clone(),
+            // Both pie endpoints share the same rate limiter (account-wide limit)
+            EndpointType::PieDetail | EndpointType::PiesList => self.pies_limiter.clone(),
             EndpointType::Account => self.account_limiter.clone(),
             EndpointType::Orders => self.orders_limiter.clone(),
             EndpointType::Instruments | EndpointType::Unknown => self.instruments_limiter.clone(), // Default to strictest
@@ -295,6 +307,48 @@ impl Trading212Cache {
         })
     }
 
+    /// Wait for rate limit reset if needed for pies endpoints
+    async fn wait_for_rate_limit_reset(&self, endpoint: &str) {
+        let endpoint_type = EndpointType::from_path(endpoint);
+        if !matches!(
+            endpoint_type,
+            EndpointType::PiesList | EndpointType::PieDetail
+        ) {
+            return;
+        }
+
+        let reset_guard = self.pies_rate_limit_reset.lock().await;
+        let Some(reset_timestamp) = *reset_guard else {
+            return;
+        };
+
+        let wait_duration = Self::calculate_wait_duration(reset_timestamp);
+        if wait_duration > 0 && wait_duration < MAX_RATE_LIMIT_WAIT_SECS {
+            tracing::warn!(
+                wait_seconds = wait_duration,
+                reset_timestamp = reset_timestamp,
+                endpoint = endpoint,
+                "Rate limit exhausted, waiting until reset"
+            );
+            drop(reset_guard); // Release lock before sleeping
+            tokio::time::sleep(Duration::from_secs(wait_duration + 1)).await;
+        }
+    }
+
+    /// Calculate wait duration until rate limit reset
+    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    fn calculate_wait_duration(reset_timestamp: i64) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let now_i64 = now as i64;
+        let wait_duration = (reset_timestamp - now_i64).max(0);
+
+        wait_duration as u64
+    }
+
     /// Make a rate-limited HTTP request
     async fn make_rate_limited_request(
         &self,
@@ -303,6 +357,9 @@ impl Trading212Cache {
         endpoint: &str,
         params: Option<&str>,
     ) -> Result<String, Trading212Error> {
+        // Wait for rate limit reset if needed (for pies endpoints)
+        self.wait_for_rate_limit_reset(endpoint).await;
+
         // Apply rate limiting
         let limiter = self.get_limiter(endpoint);
         tracing::debug!(endpoint = endpoint, "Waiting for rate limit");
@@ -330,17 +387,51 @@ impl Trading212Cache {
     }
 
     /// Handle HTTP response and extract body text
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_response(
         &self,
         response: reqwest::Response,
         endpoint: &str,
     ) -> Result<String, Trading212Error> {
         let status = response.status();
+
+        // Extract rate limit headers before consuming the response
+        let headers = response.headers();
+        let rate_limit_remaining = headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u32>().ok());
+        let rate_limit_reset = headers
+            .get("x-ratelimit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<i64>().ok());
+
         tracing::debug!(
             status_code = status.as_u16(),
             endpoint = endpoint,
+            rate_limit_remaining = ?rate_limit_remaining,
+            rate_limit_reset = ?rate_limit_reset,
             "Received API response"
         );
+
+        // Store rate limit reset timestamp for pies endpoints
+        let endpoint_type = EndpointType::from_path(endpoint);
+        if matches!(
+            endpoint_type,
+            EndpointType::PiesList | EndpointType::PieDetail
+        ) {
+            if let (Some(0), Some(reset_timestamp)) = (rate_limit_remaining, rate_limit_reset) {
+                {
+                    let mut reset_guard = self.pies_rate_limit_reset.lock().await;
+                    *reset_guard = Some(reset_timestamp);
+                } // Drop lock immediately
+                tracing::debug!(
+                    reset_timestamp = reset_timestamp,
+                    endpoint = endpoint,
+                    "Stored rate limit reset timestamp"
+                );
+            }
+        }
 
         if !status.is_success() {
             let error_text = response
@@ -461,9 +552,10 @@ mod tests {
         let limiter3 = cache.get_limiter("equity/pies");
         assert!(Arc::ptr_eq(&limiter3, &cache.pies_limiter));
 
-        // Test pie detail endpoint
+        // Test pie detail endpoint - should share limiter with pies list
         let limiter4 = cache.get_limiter("equity/pies/123");
-        assert!(Arc::ptr_eq(&limiter4, &cache.pie_detail_limiter));
+        assert!(Arc::ptr_eq(&limiter4, &cache.pies_limiter));
+        assert!(Arc::ptr_eq(&limiter3, &limiter4)); // Both should be same limiter
 
         // Test account endpoint
         let limiter5 = cache.get_limiter("account");
@@ -482,17 +574,17 @@ mod tests {
     fn test_endpoint_pattern_matching() {
         let cache = Trading212Cache::new().expect("Failed to create cache");
 
-        // Test various pie detail patterns
+        // Test various pie detail patterns - all share the same limiter now
         assert!(Arc::ptr_eq(
             &cache.get_limiter("equity/pies/123"),
-            &cache.pie_detail_limiter
+            &cache.pies_limiter
         ));
         assert!(Arc::ptr_eq(
             &cache.get_limiter("equity/pies/999999"),
-            &cache.pie_detail_limiter
+            &cache.pies_limiter
         ));
 
-        // Ensure pies list doesn't match pie detail pattern
+        // Pies list also uses the same shared limiter
         assert!(Arc::ptr_eq(
             &cache.get_limiter("equity/pies"),
             &cache.pies_limiter
@@ -506,7 +598,6 @@ mod tests {
         // All limiters should be configured (this mainly tests that creation doesn't panic)
         assert!(cache.instruments_limiter.check().is_ok());
         assert!(cache.pies_limiter.check().is_ok());
-        assert!(cache.pie_detail_limiter.check().is_ok());
         assert!(cache.account_limiter.check().is_ok());
         assert!(cache.orders_limiter.check().is_ok());
     }
@@ -673,6 +764,80 @@ mod tests {
         assert_eq!(
             EndpointType::from_path("api/equity/pies/123"),
             EndpointType::PieDetail
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_wrap)]
+    fn test_calculate_wait_duration() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Test 1: Future reset timestamp (should wait)
+        let reset_in_10_secs = now + 10;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_10_secs);
+        assert!(
+            (9..=11).contains(&wait),
+            "Should wait ~10 seconds, got {wait}"
+        );
+
+        // Test 2: Past reset timestamp (should not wait)
+        let reset_in_past = now - 100;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_past);
+        assert_eq!(wait, 0, "Should not wait for past timestamp");
+
+        // Test 3: Reset timestamp is now (edge case)
+        let reset_now = now;
+        let wait = Trading212Cache::calculate_wait_duration(reset_now);
+        assert!(wait <= 1, "Should wait 0-1 seconds for current timestamp");
+
+        // Test 4: Far future timestamp
+        let reset_in_1_hour = now + 3600;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_1_hour);
+        assert_eq!(wait, 3600, "Should wait 3600 seconds");
+
+        // Test 5: Negative timestamp (edge case - should return 0)
+        let negative_timestamp = -1000;
+        let wait = Trading212Cache::calculate_wait_duration(negative_timestamp);
+        assert_eq!(wait, 0, "Should not wait for negative timestamp");
+
+        // Test 6: Very large future timestamp
+        let reset_in_future = now + 1_000_000;
+        let wait = Trading212Cache::calculate_wait_duration(reset_in_future);
+        assert_eq!(wait, 1_000_000, "Should calculate large wait duration");
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_rate_limit_reset_non_pie_endpoint() {
+        let cache = Trading212Cache::new().expect("Failed to create cache");
+
+        // Non-pie endpoint should return immediately without waiting
+        let start = std::time::Instant::now();
+        cache.wait_for_rate_limit_reset("equity/instruments").await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 10,
+            "Should return immediately for non-pie endpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_rate_limit_reset_no_timestamp() {
+        let cache = Trading212Cache::new().expect("Failed to create cache");
+
+        // Pie endpoint but no stored timestamp should return immediately
+        let start = std::time::Instant::now();
+        cache.wait_for_rate_limit_reset("equity/pies").await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 10,
+            "Should return immediately when no reset timestamp stored"
         );
     }
 }

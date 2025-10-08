@@ -6,9 +6,9 @@
 //! ## Available Tools
 //!
 //! - [`GetInstrumentsTool`] - Retrieve tradeable financial instruments with pagination
-//! - [`GetPiesTool`] - List all investment pies
-//! - [`GetPieByIdTool`] - Get detailed information about a specific pie
+//! - [`GetAllPiesWithHoldingsTool`] - Get all pies with detailed holdings and instrument names
 //! - [`UpdatePieTool`] - Update pie configuration and allocations
+//! - [`CreatePieTool`] - Create new investment pies
 //!
 //! ## Data Structures
 //!
@@ -345,41 +345,23 @@ pub struct GetInstrumentsTool {
 }
 
 #[mcp_tool(
-    name = "get_pies",
-    description = "Get list of all investment pies from Trading212",
-    title = "Get Trading212 Investment Pies",
+    name = "get_all_pies_with_holdings",
+    description = "Get all investment pies with their detailed holdings and instrument information in a single call. This tool automatically handles rate limiting to prevent API errors.",
+    title = "Get All Trading212 Pies with Holdings",
     idempotent_hint = true,
     destructive_hint = false,
     open_world_hint = false,
     read_only_hint = true
 )]
-/// Tool for retrieving all Trading212 investment pies.
+/// Tool for retrieving all Trading212 investment pies with their detailed holdings.
 ///
-/// Returns a complete list of the user's investment pies with summary information
-/// including performance metrics, cash balances, and current status.
-#[allow(missing_docs)]
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetPiesTool {}
-
-#[mcp_tool(
-    name = "get_pie_by_id",
-    description = "Get detailed information about a specific investment pie by ID",
-    title = "Get Trading212 Pie Details",
-    idempotent_hint = true,
-    destructive_hint = false,
-    open_world_hint = false,
-    read_only_hint = true
-)]
-/// Tool for retrieving detailed information about a specific Trading212 investment pie.
-///
-/// Provides comprehensive details about a pie including individual instrument holdings,
+/// This tool combines the functionality of `get_pies` and `get_pie_by_id` to provide
+/// a comprehensive view of all pies including their individual instrument holdings,
 /// allocation percentages, performance metrics, and configuration settings.
+/// The tool automatically handles rate limiting to prevent 429 errors.
 #[allow(missing_docs)]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct GetPieByIdTool {
-    /// The unique identifier of the pie to retrieve (must be positive)
-    pub pie_id: i32,
-}
+pub struct GetAllPiesWithHoldingsTool {}
 
 #[mcp_tool(
     name = "update_pie",
@@ -1113,10 +1095,11 @@ impl GetInstrumentsTool {
     }
 }
 
-impl GetPiesTool {
-    /// Execute the `get_pies` tool.
+impl GetAllPiesWithHoldingsTool {
+    /// Execute the `get_all_pies_with_holdings` tool.
     ///
-    /// Retrieves a list of all investment pies from Trading212 API.
+    /// Retrieves all investment pies with their detailed holdings from Trading212 API.
+    /// This operation automatically handles rate limiting by fetching pie details sequentially.
     ///
     /// # Arguments
     ///
@@ -1126,7 +1109,7 @@ impl GetPiesTool {
     ///
     /// # Errors
     ///
-    /// Returns an error if the API request fails, response parsing fails,
+    /// Returns an error if any API request fails, response parsing fails,
     /// or serialization of the results fails.
     pub async fn call_tool(
         &self,
@@ -1134,67 +1117,118 @@ impl GetPiesTool {
         config: &Trading212Config,
         cache: &Trading212Cache,
     ) -> Result<CallToolResult, CallToolError> {
-        tracing::debug!("Executing get_pies tool");
+        tracing::debug!("Executing get_all_pies_with_holdings tool");
 
+        // Fetch all pies
+        let pies = Self::fetch_all_pies(client, config, cache).await?;
+
+        // Fetch detailed info for each pie
+        let detailed_pies = Self::fetch_pie_details(client, config, cache, &pies).await;
+
+        tracing::info!(
+            total_pies = pies.len(),
+            successful_details = detailed_pies.len(),
+            "Successfully retrieved all pies with holdings"
+        );
+
+        create_json_response(&detailed_pies, "pies with holdings", detailed_pies.len())
+    }
+
+    /// Fetch all pies from the API
+    async fn fetch_all_pies(
+        client: &Client,
+        config: &Trading212Config,
+        cache: &Trading212Cache,
+    ) -> Result<Vec<Pie>, CallToolError> {
         match cache
             .request::<Vec<Pie>>(client, config, "equity/pies", None)
             .await
         {
             Ok(pies) => {
-                tracing::info!(count = pies.len(), "Successfully retrieved pies");
-                create_json_response(&pies, "investment pies", pies.len())
+                tracing::info!(count = pies.len(), "Successfully retrieved pies list");
+                Ok(pies)
             }
             Err(e) => {
-                tracing::error!(error = %e, "Tool execution failed");
+                tracing::error!(error = %e, "Failed to retrieve pies list");
                 Err(CallToolError::new(e))
             }
         }
     }
-}
 
-impl GetPieByIdTool {
-    /// Execute the `get_pie_by_id` tool.
-    ///
-    /// Retrieves detailed information about a specific investment pie from Trading212 API.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - HTTP client for making API requests
-    /// * `config` - Trading212 configuration containing API credentials
-    /// * `cache` - Cache and rate limiter for API requests
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the API request fails, response parsing fails,
-    /// serialization of the results fails, or if input validation fails.
-    pub async fn call_tool(
-        &self,
+    /// Fetch detailed information for each pie
+    async fn fetch_pie_details(
         client: &Client,
         config: &Trading212Config,
         cache: &Trading212Cache,
-    ) -> Result<CallToolResult, CallToolError> {
-        // Validate pie_id
-        if self.pie_id <= 0 {
-            return Err(CallToolError::new(Trading212Error::conversion_error(
-                "pie_id must be a positive integer".to_string(),
-            )));
+        pies: &[Pie],
+    ) -> Vec<serde_json::Value> {
+        let mut detailed_pies = Vec::new();
+
+        for pie in pies {
+            let pie_with_details = Self::fetch_single_pie_details(client, config, cache, pie).await;
+            detailed_pies.push(pie_with_details);
         }
 
-        tracing::debug!(pie_id = self.pie_id, "Executing get_pie_by_id tool");
+        detailed_pies
+    }
 
-        let endpoint = format!("equity/pies/{}", self.pie_id);
+    /// Fetch detailed information for a single pie
+    #[allow(clippy::cognitive_complexity)]
+    async fn fetch_single_pie_details(
+        client: &Client,
+        config: &Trading212Config,
+        cache: &Trading212Cache,
+        pie: &Pie,
+    ) -> serde_json::Value {
+        let endpoint = format!("equity/pies/{}", pie.id);
+        tracing::debug!(pie_id = pie.id, "Fetching details for pie");
 
         match cache
-            .request::<serde_json::Value>(client, config, &endpoint, None)
+            .request::<DetailedPieResponse>(client, config, &endpoint, None)
             .await
         {
-            Ok(pie_detail) => {
-                tracing::info!(pie_id = self.pie_id, "Successfully retrieved pie details");
-                create_single_item_response(&pie_detail, &format!("Pie {} details", self.pie_id))
+            Ok(details) => {
+                tracing::debug!(pie_id = pie.id, "Successfully retrieved pie details");
+                serde_json::json!({
+                    "id": pie.id,
+                    "cash": pie.cash,
+                    "dividendDetails": pie.dividend_details,
+                    "result": pie.result,
+                    "progress": pie.progress,
+                    "status": pie.status,
+                    "instruments": details.instruments,
+                    "settings": details.settings
+                })
             }
             Err(e) => {
-                tracing::error!(error = %e, pie_id = self.pie_id, "Tool execution failed");
-                Err(CallToolError::new(e))
+                // Provide more granular error logging for different failure modes
+                let error_type = match &e {
+                    Trading212Error::ApiError { status, .. } if *status == 429 => "rate_limit",
+                    Trading212Error::ApiError { status, .. } if *status == 404 => "not_found",
+                    Trading212Error::ApiError { status, .. } if *status >= 500 => "server_error",
+                    Trading212Error::ApiError { .. } => "api_error",
+                    Trading212Error::RequestFailed { .. } => "network_error",
+                    Trading212Error::ParseError { .. } => "parse_error",
+                    _ => "unknown_error",
+                };
+
+                tracing::warn!(
+                    pie_id = pie.id,
+                    error = %e,
+                    error_type = error_type,
+                    "Failed to retrieve details for pie, returning partial data"
+                );
+                serde_json::json!({
+                    "id": pie.id,
+                    "cash": pie.cash,
+                    "dividendDetails": pie.dividend_details,
+                    "result": pie.result,
+                    "progress": pie.progress,
+                    "status": pie.status,
+                    "instruments": null,
+                    "settings": null,
+                    "error": format!("Failed to fetch holdings: {}", e)
+                })
             }
         }
     }
@@ -1479,7 +1513,7 @@ impl CreatePieTool {
 
 tool_box! {
     Trading212Tools,
-    [GetInstrumentsTool, GetPiesTool, GetPieByIdTool, UpdatePieTool, CreatePieTool]
+    [GetInstrumentsTool, GetAllPiesWithHoldingsTool, UpdatePieTool, CreatePieTool]
 }
 
 #[cfg(test)]
@@ -1788,108 +1822,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_get_pies_success() {
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path("/equity/pies"))
-                .and(header("Authorization", "test_key"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(vec![Pie {
-                    id: 123,
-                    cash: 10.5,
-                    dividend_details: DividendDetails {
-                        gained: 5.0,
-                        reinvested: 4.0,
-                        in_cash: 1.0,
-                    },
-                    result: PieResult {
-                        price_avg_invested_value: 1000.0,
-                        price_avg_value: 1100.0,
-                        price_avg_result: 100.0,
-                        price_avg_result_coef: 0.1,
-                    },
-                    progress: Some(0.75),
-                    status: Some("AHEAD".to_string()),
-                }]))
-                .mount(&mock_server)
-                .await;
-
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: mock_server.uri(),
-            };
-
-            let client = Client::new();
-            let tool = GetPiesTool {};
-
-            let cache = Trading212Cache::new().unwrap();
-            let result = tool.call_tool(&client, &config, &cache).await;
-
-            assert!(result.is_ok());
-        }
-
-        #[tokio::test]
-        async fn test_get_pie_by_id_success() {
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path("/equity/pies/123"))
-                .and(header("Authorization", "test_key"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "id": 123,
-                    "name": "My Investment Pie",
-                    "targetValueAmount": 5000.0,
-                    "instruments": [
-                        {
-                            "ticker": "AAPL",
-                            "targetSharePercentage": 0.5
-                        }
-                    ]
-                })))
-                .mount(&mock_server)
-                .await;
-
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: mock_server.uri(),
-            };
-
-            let client = Client::new();
-            let tool = GetPieByIdTool { pie_id: 123 };
-
-            let cache = Trading212Cache::new().unwrap();
-            let result = tool.call_tool(&client, &config, &cache).await;
-
-            assert!(result.is_ok());
-        }
-
-        #[tokio::test]
-        async fn test_get_pie_by_id_not_found() {
-            let mock_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path("/equity/pies/999"))
-                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
-                    "error": "Pie not found"
-                })))
-                .mount(&mock_server)
-                .await;
-
-            let config = Trading212Config {
-                api_key: "test_key".to_string(),
-                base_url: mock_server.uri(),
-            };
-
-            let client = Client::new();
-            let tool = GetPieByIdTool { pie_id: 999 };
-
-            let cache = Trading212Cache::new().unwrap();
-            let result = tool.call_tool(&client, &config, &cache).await;
-
-            assert!(result.is_err());
-        }
-
-        #[tokio::test]
         async fn test_network_timeout() {
             let config = Trading212Config {
                 api_key: "test_key".to_string(),
@@ -1907,6 +1839,116 @@ mod tests {
             let result = tool.call_tool(&client, &config, &cache).await;
 
             assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_get_all_pies_with_holdings_partial_failure() {
+            use serde_json::json;
+
+            let mock_server = MockServer::start().await;
+
+            // Mock successful pies list response with 3 pies
+            Mock::given(method("GET"))
+                .and(path("/equity/pies"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {
+                        "id": 101,
+                        "cash": 10.0,
+                        "dividendDetails": {"gained": 1.0, "reinvested": 0.5, "inCash": 0.5},
+                        "result": {
+                            "priceAvgInvestedValue": 100.0,
+                            "priceAvgValue": 110.0,
+                            "priceAvgResult": 10.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.5,
+                        "status": "AHEAD"
+                    },
+                    {
+                        "id": 102,
+                        "cash": 20.0,
+                        "dividendDetails": {"gained": 2.0, "reinvested": 1.0, "inCash": 1.0},
+                        "result": {
+                            "priceAvgInvestedValue": 200.0,
+                            "priceAvgValue": 220.0,
+                            "priceAvgResult": 20.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.6,
+                        "status": "AHEAD"
+                    },
+                    {
+                        "id": 103,
+                        "cash": 30.0,
+                        "dividendDetails": {"gained": 3.0, "reinvested": 1.5, "inCash": 1.5},
+                        "result": {
+                            "priceAvgInvestedValue": 300.0,
+                            "priceAvgValue": 330.0,
+                            "priceAvgResult": 30.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "progress": 0.7,
+                        "status": "AHEAD"
+                    }
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            // Mock successful detail response for pie 101
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/101"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "instruments": [{"ticker": "AAPL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 10.0}],
+                    "settings": {"id": 101, "name": "Pie 1", "icon": "chart", "goal": null, "dividendCashAction": "REINVEST"}
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Mock 404 error for pie 102 (not found)
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/102"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                    "error": "Pie not found"
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Mock successful detail response for pie 103
+            Mock::given(method("GET"))
+                .and(path("/equity/pies/103"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "instruments": [{"ticker": "GOOGL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 5.0}],
+                    "settings": {"id": 103, "name": "Pie 3", "icon": "rocket", "goal": 1000.0, "dividendCashAction": "REINVEST"}
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let config = Trading212Config {
+                api_key: "test_key".to_string(),
+                base_url: mock_server.uri(),
+            };
+
+            let client = Client::new();
+            let tool = GetAllPiesWithHoldingsTool {};
+            let cache = Trading212Cache::new().unwrap();
+
+            let result = tool.call_tool(&client, &config, &cache).await;
+
+            // Should succeed even though one pie failed - this is the key test for graceful degradation
+            assert!(
+                result.is_ok(),
+                "Tool should handle partial failures gracefully"
+            );
+
+            let response = result.unwrap();
+            assert!(!response.content.is_empty(), "Response should have content");
+
+            // Verify the response mentions all 3 pies by checking the debug representation
+            let response_text = format!("{:?}", response);
+            assert!(
+                response_text.contains("3 pies") || response_text.contains("\"id\": 101"),
+                "Should report all 3 pies in response"
+            );
         }
 
         #[tokio::test]
@@ -2500,48 +2542,13 @@ mod tests {
         }
 
         #[test]
-        fn test_get_pies_tool_serialization() {
-            let tool = GetPiesTool {};
-
-            // Test serialization
-            let json = serde_json::to_string(&tool);
-            assert!(json.is_ok());
-
-            // Test deserialization
-            let json_str = json.unwrap();
-            let deserialized: Result<GetPiesTool, _> = serde_json::from_str(&json_str);
-            assert!(deserialized.is_ok());
-        }
-
-        #[test]
-        fn test_get_pie_by_id_tool_serialization() {
-            let tool = GetPieByIdTool { pie_id: 12345 };
-
-            // Test serialization
-            let json = serde_json::to_string(&tool);
-            assert!(json.is_ok());
-
-            // Test deserialization
-            let json_str = json.unwrap();
-            let deserialized: Result<GetPieByIdTool, _> = serde_json::from_str(&json_str);
-            assert!(deserialized.is_ok());
-
-            let deserialized_tool = deserialized.unwrap();
-            assert_eq!(deserialized_tool.pie_id, tool.pie_id);
-        }
-
-        #[test]
         fn test_trading212_tools_enum_debug() {
-            let tools = vec![
-                Trading212Tools::GetInstrumentsTool(GetInstrumentsTool {
-                    search: Some("TEST".to_string()),
-                    instrument_type: None,
-                    limit: None,
-                    page: None,
-                }),
-                Trading212Tools::GetPiesTool(GetPiesTool {}),
-                Trading212Tools::GetPieByIdTool(GetPieByIdTool { pie_id: 999 }),
-            ];
+            let tools = vec![Trading212Tools::GetInstrumentsTool(GetInstrumentsTool {
+                search: Some("TEST".to_string()),
+                instrument_type: None,
+                limit: None,
+                page: None,
+            })];
 
             for tool in tools {
                 // Test that enum variants can be formatted for debugging
@@ -2553,18 +2560,6 @@ mod tests {
 
     mod edge_case_tests {
         use super::*;
-
-        #[test]
-        fn test_get_pie_by_id_with_zero() {
-            let tool = GetPieByIdTool { pie_id: 0 };
-            assert_eq!(tool.pie_id, 0);
-        }
-
-        #[test]
-        fn test_get_pie_by_id_with_max_value() {
-            let tool = GetPieByIdTool { pie_id: i32::MAX };
-            assert_eq!(tool.pie_id, i32::MAX);
-        }
 
         #[test]
         fn test_get_instruments_with_empty_search() {
@@ -3084,13 +3079,7 @@ mod tests {
                         "type": "STOCK"
                     }),
                 ),
-                ("get_pies", json!({})),
-                (
-                    "get_pie_by_id",
-                    json!({
-                        "pie_id": 12345
-                    }),
-                ),
+                ("get_all_pies_with_holdings", json!({})),
             ];
 
             for (tool_name, arguments) in test_cases {
