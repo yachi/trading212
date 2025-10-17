@@ -1,0 +1,44 @@
+# Git files
+.git/
+.github/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.*
+.trading212-api-key
+
+# Rust build artifacts
+target/
+debug/
+release/
+
+# Test and coverage files
+tarpaulin-report.html
+cobertura.xml
+*.profraw
+*.profdata
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Logs
+*.log
+
+# Docker compose (not needed in build context)
+docker-compose.yml
