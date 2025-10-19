@@ -18,11 +18,12 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock ./
 
 # Create dummy files to cache dependencies (layer caching optimization)
-RUN mkdir -p src/bin && \
+RUN mkdir -p src/bin benches && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > src/bin/remote-server.rs && \
+    echo "fn main() {}" > benches/memory_benchmark.rs && \
     cargo build --release --bin remote-server --features http-server && \
-    rm -rf src target/release/.fingerprint/trading212-mcp-server-*
+    rm -rf src benches target/release/.fingerprint/trading212-mcp-server-*
 
 # Copy actual source code
 COPY src ./src
