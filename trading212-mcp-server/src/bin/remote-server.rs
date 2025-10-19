@@ -386,7 +386,7 @@ async fn route_mcp_method(
             info!("Request cancelled notification received");
             Ok(serde_json::Value::Null)
         }
-        "tools/list" => handle_list_tools(),
+        "tools/list" => Ok(handle_list_tools()),
         "tools/call" => handle_call_tool(app_state, context, params).await,
         _ => {
             warn!(method = %method, "Unknown method requested");
@@ -500,17 +500,14 @@ fn handle_initialize(params: Option<&serde_json::Value>) -> Result<serde_json::V
 }
 
 /// Handle tools/list method
-fn handle_list_tools() -> Result<serde_json::Value, McpError> {
+fn handle_list_tools() -> serde_json::Value {
     use trading212_mcp_server::tools::Trading212Tools;
 
     let tools = Trading212Tools::tools();
 
-    serde_json::to_value(tools).map_err(|e| {
-        error!(error = %e, "Failed to serialize tools list");
-        McpError {
-            code: -32603,
-            message: "Internal error occurred".to_string(),
-        }
+    // Wrap tools array in an object with "tools" field per MCP protocol
+    serde_json::json!({
+        "tools": tools
     })
 }
 
