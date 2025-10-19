@@ -26,8 +26,9 @@ RUN mkdir -p src/bin benches && \
     cargo build --release --bin remote-server --features http-server && \
     rm -rf src benches target/release/.fingerprint/trading212-mcp-server-*
 
-# Copy actual source code
+# Copy actual source code and benchmarks
 COPY src ./src
+COPY benches ./benches
 
 # Build release binary with optimizations
 # The release profile in Cargo.toml should include:
