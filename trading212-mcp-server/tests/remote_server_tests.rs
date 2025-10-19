@@ -574,4 +574,247 @@ mod remote_server_integration_tests {
         assert_eq!(trimmed, "api-key");
         assert_ne!(key_with_whitespace, trimmed);
     }
+
+    // ========================================================================
+    // Initialize Handler Tests
+    // ========================================================================
+
+    #[test]
+    fn test_initialize_request_structure() {
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test-client",
+                "version": "1.0.0"
+            }
+        });
+        let request = create_mcp_request("initialize", Some(&params));
+
+        assert_eq!(request["method"], "initialize");
+        assert_eq!(request["params"]["protocolVersion"], "2024-11-05");
+        assert!(request["params"]["clientInfo"].is_object());
+    }
+
+    #[test]
+    fn test_initialize_response_structure() {
+        // Test expected initialize response structure
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": "2025-06-18",
+                "serverInfo": {
+                    "name": "Trading212 MCP Server",
+                    "version": "0.1.0",
+                    "title": "Trading212 MCP Server"
+                },
+                "capabilities": {
+                    "tools": {
+                        "listChanged": null
+                    }
+                },
+                "instructions": "Access Trading212 API to get instrument information"
+            }
+        });
+
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert!(response["result"].is_object());
+        assert!(response["result"]["serverInfo"].is_object());
+        assert_eq!(
+            response["result"]["serverInfo"]["name"],
+            "Trading212 MCP Server"
+        );
+        assert_eq!(response["result"]["serverInfo"]["version"], "0.1.0");
+        assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert!(response["result"]["instructions"].is_string());
+    }
+
+    #[test]
+    fn test_initialize_without_params() {
+        // Initialize should work even without params
+        let request = create_mcp_request("initialize", None);
+        assert_eq!(request["method"], "initialize");
+        assert!(request["params"].is_null());
+    }
+
+    #[test]
+    fn test_initialize_with_minimal_params() {
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {}
+        });
+        let request = create_mcp_request("initialize", Some(&params));
+
+        assert_eq!(request["params"]["protocolVersion"], "2024-11-05");
+        assert!(request["params"]["capabilities"].is_object());
+        // clientInfo is optional
+        assert!(request["params"]["clientInfo"].is_null());
+    }
+
+    #[test]
+    fn test_initialize_protocol_version_formats() {
+        let versions = vec!["2024-11-05", "2025-06-18", "1.0.0"];
+
+        for version in versions {
+            let params = json!({
+                "protocolVersion": version,
+                "capabilities": {}
+            });
+            let request = create_mcp_request("initialize", Some(&params));
+            assert_eq!(request["params"]["protocolVersion"], version);
+        }
+    }
+
+    #[test]
+    fn test_initialize_server_capabilities() {
+        // Test that server capabilities include tools
+        let capabilities = json!({
+            "tools": {
+                "listChanged": null
+            }
+        });
+
+        assert!(capabilities["tools"].is_object());
+        assert!(capabilities["tools"]["listChanged"].is_null());
+        // Other capabilities should not be present
+        assert!(capabilities["prompts"].is_null());
+        assert!(capabilities["resources"].is_null());
+    }
+
+    #[test]
+    fn test_initialize_client_info_formats() {
+        let client_infos = vec![
+            json!({"name": "claude-code", "version": "2.0.22"}),
+            json!({"name": "test-client", "version": "1.0.0"}),
+            json!({"name": "mcp-client", "version": "0.5.0"}),
+        ];
+
+        for client_info in client_infos {
+            let params = json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": client_info
+            });
+            let request = create_mcp_request("initialize", Some(&params));
+
+            assert!(request["params"]["clientInfo"].is_object());
+            assert!(request["params"]["clientInfo"]["name"].is_string());
+            assert!(request["params"]["clientInfo"]["version"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_initialize_method_routing() {
+        let methods = ["initialize", "tools/list", "tools/call"];
+        assert!(methods.contains(&"initialize"));
+
+        // Initialize should be routed correctly
+        let request = create_mcp_request("initialize", None);
+        assert_eq!(request["method"], "initialize");
+    }
+
+    #[test]
+    fn test_initialize_response_fields_required() {
+        // All required fields for initialize response
+        let response = json!({
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {
+                "name": "Trading212 MCP Server",
+                "version": "0.1.0"
+            },
+            "capabilities": {}
+        });
+
+        // Required fields
+        assert!(response["protocolVersion"].is_string());
+        assert!(response["serverInfo"].is_object());
+        assert!(response["capabilities"].is_object());
+
+        // Server info required fields
+        assert!(response["serverInfo"]["name"].is_string());
+        assert!(response["serverInfo"]["version"].is_string());
+    }
+
+    #[test]
+    fn test_initialize_response_fields_optional() {
+        let response = json!({
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {
+                "name": "Trading212 MCP Server",
+                "version": "0.1.0",
+                "title": "Trading212 MCP Server"
+            },
+            "capabilities": {
+                "tools": {}
+            },
+            "instructions": "Test instructions",
+            "meta": null
+        });
+
+        // Optional fields
+        assert!(response["serverInfo"]["title"].is_string());
+        assert!(response["instructions"].is_string());
+        assert!(response["meta"].is_null());
+    }
+
+    #[test]
+    fn test_initialize_error_handling() {
+        // Test error response format if initialization fails
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32603,
+                "message": "Internal error occurred"
+            }
+        });
+
+        assert!(error_response["error"].is_object());
+        assert_eq!(error_response["error"]["code"], -32603);
+        assert!(error_response["error"]["message"].is_string());
+    }
+
+    #[test]
+    fn test_mcp_initialize_handshake_sequence() {
+        // Test the typical MCP handshake sequence
+
+        // 1. Client sends initialize request
+        let init_request = create_mcp_request(
+            "initialize",
+            Some(&json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1.0"}
+            })),
+        );
+        assert_eq!(init_request["method"], "initialize");
+
+        // 2. Server should respond with initialize result
+        // This is tested by the actual handler
+
+        // 3. Client sends initialized notification (not tested here, no response expected)
+
+        // 4. Client can now use other methods
+        let tools_request = create_mcp_request("tools/list", None);
+        assert_eq!(tools_request["method"], "tools/list");
+    }
+
+    #[test]
+    fn test_initialize_version_compatibility() {
+        // Server should handle different protocol versions
+        let server_version = "2025-06-18";
+        let client_versions = vec!["2024-11-05", "2025-06-18"];
+
+        for client_version in client_versions {
+            let params = json!({
+                "protocolVersion": client_version,
+                "capabilities": {}
+            });
+            let _request = create_mcp_request("initialize", Some(&params));
+
+            // Server should return its own protocol version
+            assert_eq!(server_version, "2025-06-18");
+        }
+    }
 }

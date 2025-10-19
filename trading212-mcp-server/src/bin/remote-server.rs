@@ -377,6 +377,7 @@ async fn handle_mcp_request(
 
     // Route based on method
     let result = match request.method.as_str() {
+        "initialize" => handle_initialize(request.params.as_ref()),
         "tools/list" => handle_list_tools(),
         "tools/call" => handle_call_tool(&app_state, &context, request.params).await,
         _ => {
@@ -403,6 +404,50 @@ async fn handle_mcp_request(
             error: Some(error),
         })),
     }
+}
+
+/// Handle initialize method
+fn handle_initialize(params: Option<&serde_json::Value>) -> Result<serde_json::Value, McpError> {
+    use rust_mcp_sdk::schema::{
+        Implementation, InitializeResult, ServerCapabilities, ServerCapabilitiesTools,
+        LATEST_PROTOCOL_VERSION,
+    };
+
+    // Log the initialize request
+    info!("Handling initialize request");
+
+    // Parse client info from params if provided (optional, for logging)
+    if let Some(params_value) = params {
+        info!(
+            client_info = ?params_value.get("clientInfo"),
+            protocol_version = ?params_value.get("protocolVersion"),
+            "Client initialization details"
+        );
+    }
+
+    // Create server details matching main.rs
+    let server_details = InitializeResult {
+        server_info: Implementation {
+            name: "Trading212 MCP Server".to_string(),
+            version: "0.1.0".to_string(),
+            title: Some("Trading212 MCP Server".to_string()),
+        },
+        capabilities: ServerCapabilities {
+            tools: Some(ServerCapabilitiesTools { list_changed: None }),
+            ..Default::default()
+        },
+        meta: None,
+        instructions: Some("Access Trading212 API to get instrument information".to_string()),
+        protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
+    };
+
+    serde_json::to_value(server_details).map_err(|e| {
+        error!(error = %e, "Failed to serialize initialize result");
+        McpError {
+            code: -32603,
+            message: "Internal error occurred".to_string(),
+        }
+    })
 }
 
 /// Handle tools/list method
