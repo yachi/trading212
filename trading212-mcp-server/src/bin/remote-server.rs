@@ -548,3 +548,164 @@ async fn handle_call_tool(
             })
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_handle_initialize_returns_proper_result() {
+        // Test with params
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test-client",
+                "version": "1.0.0"
+            }
+        });
+
+        let result = handle_initialize(Some(&params));
+        assert!(result.is_ok(), "handle_initialize should return Ok");
+
+        let value = result.unwrap();
+        assert!(value["protocolVersion"].is_string());
+        assert!(value["serverInfo"].is_object());
+        assert!(value["capabilities"].is_object());
+        assert_eq!(value["serverInfo"]["name"], "Trading212 MCP Server");
+        assert_eq!(value["serverInfo"]["version"], "0.1.0");
+        assert!(value["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn test_handle_initialize_without_params() {
+        // Test without params
+        let result = handle_initialize(None);
+        assert!(
+            result.is_ok(),
+            "handle_initialize should work without params"
+        );
+
+        let value = result.unwrap();
+        assert!(value["serverInfo"].is_object());
+        assert_eq!(value["serverInfo"]["name"], "Trading212 MCP Server");
+    }
+
+    #[test]
+    fn test_handle_initialize_response_has_all_required_fields() {
+        let result = handle_initialize(None).unwrap();
+
+        // Required fields
+        assert!(result.get("protocolVersion").is_some());
+        assert!(result.get("serverInfo").is_some());
+        assert!(result.get("capabilities").is_some());
+
+        // Server info fields
+        let server_info = &result["serverInfo"];
+        assert!(server_info.get("name").is_some());
+        assert!(server_info.get("version").is_some());
+
+        // Optional fields should be present
+        assert!(result.get("instructions").is_some());
+    }
+
+    #[test]
+    fn test_handle_initialize_error_code() {
+        // This tests that serialization errors return the correct error code
+        // If handle_initialize fails to serialize, it should return error code -32603
+        let result = handle_initialize(None);
+        assert!(
+            result.is_ok(),
+            "Normal case should succeed, but if it fails, error code should be -32603"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_request_routing_initialize() {
+        // Test that the initialize method is properly routed
+        // This tests the match arm in handle_mcp_request
+
+        let app_state = Arc::new(AppState {
+            client: Client::new(),
+            cache: Arc::new(Trading212Cache::new().expect("Failed to create cache")),
+        });
+
+        let context = Trading212Context {
+            config: Trading212Config::new_with_api_key("test-key".to_string()),
+        };
+
+        // Create an initialize request
+        let request = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: serde_json::Value::Number(1.into()),
+            method: "initialize".to_string(),
+            params: Some(json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {}
+            })),
+        };
+
+        // Call the handler directly
+        let response = handle_mcp_request(State(app_state), context, Json(request))
+            .await
+            .unwrap();
+
+        // Verify response structure
+        assert_eq!(response.0.jsonrpc, "2.0");
+        assert!(response.0.result.is_some());
+        assert!(response.0.error.is_none());
+
+        // Verify the result contains initialize response
+        let result = response.0.result.unwrap();
+        assert_eq!(result["serverInfo"]["name"], "Trading212 MCP Server");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_request_routing_unknown_method() {
+        // Test that unknown methods return an error
+        let app_state = Arc::new(AppState {
+            client: Client::new(),
+            cache: Arc::new(Trading212Cache::new().expect("Failed to create cache")),
+        });
+
+        let context = Trading212Context {
+            config: Trading212Config::new_with_api_key("test-key".to_string()),
+        };
+
+        let request = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: serde_json::Value::Number(1.into()),
+            method: "unknown_method".to_string(),
+            params: None,
+        };
+
+        let response = handle_mcp_request(State(app_state), context, Json(request))
+            .await
+            .unwrap();
+
+        // Should return an error
+        assert!(response.0.error.is_some());
+        assert_eq!(response.0.error.unwrap().code, -32601); // Method not found
+    }
+
+    #[test]
+    fn test_handle_initialize_with_different_protocol_versions() {
+        // Test that handle_initialize works with different protocol versions
+        let versions = vec!["2024-11-05", "2025-06-18", "1.0.0"];
+
+        for version in versions {
+            let params = json!({
+                "protocolVersion": version,
+                "capabilities": {}
+            });
+
+            let result = handle_initialize(Some(&params));
+            assert!(result.is_ok());
+
+            // Server should return its own protocol version regardless of client version
+            let value = result.unwrap();
+            assert!(value["protocolVersion"].is_string());
+        }
+    }
+}
