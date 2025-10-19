@@ -175,6 +175,7 @@ struct McpRequest {
 struct McpResponse {
     jsonrpc: String,
     /// ID from the request - only present for requests, not notifications
+    #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<serde_json::Value>,
@@ -383,6 +384,16 @@ async fn handle_mcp_request(
     // Route based on method
     let result = match request.method.as_str() {
         "initialize" => handle_initialize(request.params.as_ref()),
+        "initialized" => {
+            // This is a notification from the client confirming initialization is complete
+            info!("Client initialization confirmed");
+            Ok(serde_json::Value::Null)
+        }
+        "notifications/cancelled" => {
+            // Client cancelled a request - just acknowledge
+            info!("Request cancelled notification received");
+            Ok(serde_json::Value::Null)
+        }
         "tools/list" => handle_list_tools(),
         "tools/call" => handle_call_tool(&app_state, &context, request.params).await,
         _ => {
@@ -394,20 +405,33 @@ async fn handle_mcp_request(
         }
     };
 
-    // Build response (only for requests with an ID, not for notifications)
-    match result {
-        Ok(result_value) => Ok(Json(McpResponse {
+    // Build response - only send responses for requests (with ID), not notifications
+    if is_notification {
+        // For notifications, we don't send a response
+        info!(method = %request.method, "Notification processed, no response sent");
+        // Return an empty response (Axum requires a response, but this won't be sent to client)
+        Ok(Json(McpResponse {
             jsonrpc: "2.0".to_string(),
-            id: request.id,
-            result: Some(result_value),
-            error: None,
-        })),
-        Err(error) => Ok(Json(McpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: request.id,
+            id: None,
             result: None,
-            error: Some(error),
-        })),
+            error: None,
+        }))
+    } else {
+        // For requests, send the result or error
+        match result {
+            Ok(result_value) => Ok(Json(McpResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: Some(result_value),
+                error: None,
+            })),
+            Err(error) => Ok(Json(McpResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: None,
+                error: Some(error),
+            })),
+        }
     }
 }
 
@@ -728,15 +752,12 @@ mod tests {
             config: Trading212Config::new_with_api_key("test-key".to_string()),
         };
 
-        // Create a notification (no ID)
+        // Create an "initialized" notification (no ID)
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
             id: None,
-            method: "initialize".to_string(),
-            params: Some(json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {}
-            })),
+            method: "initialized".to_string(),
+            params: None,
         };
 
         // Call the handler - should succeed even without ID
@@ -744,9 +765,63 @@ mod tests {
             .await
             .unwrap();
 
-        // Response should have no ID (matching the notification)
+        // Response should have no ID and no result (notification doesn't get a response)
         assert_eq!(response.0.jsonrpc, "2.0");
         assert!(response.0.id.is_none());
+        assert!(response.0.result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_request_vs_notification_difference() {
+        // Test that requests get responses but notifications don't
+        let app_state = Arc::new(AppState {
+            client: Client::new(),
+            cache: Arc::new(Trading212Cache::new().expect("Failed to create cache")),
+        });
+
+        let context = Trading212Context {
+            config: Trading212Config::new_with_api_key("test-key".to_string()),
+        };
+
+        // Test 1: Request (with ID) should get a proper response
+        let request_with_id = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::Value::Number(1.into())),
+            method: "initialize".to_string(),
+            params: Some(json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {}
+            })),
+        };
+
+        let response = handle_mcp_request(
+            State(app_state.clone()),
+            Trading212Context {
+                config: Trading212Config::new_with_api_key("test-key".to_string()),
+            },
+            Json(request_with_id),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0.jsonrpc, "2.0");
+        assert_eq!(response.0.id, Some(serde_json::Value::Number(1.into())));
         assert!(response.0.result.is_some());
+
+        // Test 2: Notification (without ID) should get empty response
+        let notification_without_id = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "initialized".to_string(),
+            params: None,
+        };
+
+        let response = handle_mcp_request(State(app_state), context, Json(notification_without_id))
+            .await
+            .unwrap();
+
+        assert_eq!(response.0.jsonrpc, "2.0");
+        assert!(response.0.id.is_none());
+        assert!(response.0.result.is_none());
     }
 }
