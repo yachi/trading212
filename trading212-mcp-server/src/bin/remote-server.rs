@@ -505,13 +505,12 @@ fn handle_list_tools() -> Result<serde_json::Value, McpError> {
 
     let tools = Trading212Tools::tools();
 
-    serde_json::to_value(tools).map_err(|e| {
-        error!(error = %e, "Failed to serialize tools list");
-        McpError {
-            code: -32603,
-            message: "Internal error occurred".to_string(),
-        }
-    })
+    // Wrap tools array in an object with "tools" field per MCP protocol
+    let response = serde_json::json!({
+        "tools": tools
+    });
+
+    Ok(response)
 }
 
 /// Handle tools/call method
