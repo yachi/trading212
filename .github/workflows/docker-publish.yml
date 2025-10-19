@@ -14,7 +14,14 @@ env:
 
 jobs:
   build-and-push-image:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -56,9 +63,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          sbom: true
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v2
