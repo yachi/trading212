@@ -20,6 +20,7 @@ COPY Cargo.toml Cargo.lock ./
 # Create dummy files to cache dependencies (layer caching optimization)
 RUN mkdir -p src/bin benches && \
     echo "fn main() {}" > src/main.rs && \
+    echo "pub fn lib_dummy() {}" > src/lib.rs && \
     echo "fn main() {}" > src/bin/remote-server.rs && \
     echo "fn main() {}" > benches/memory_benchmark.rs && \
     cargo build --release --bin remote-server --features http-server && \
