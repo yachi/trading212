@@ -163,7 +163,9 @@ struct HealthResponse {
 struct McpRequest {
     #[allow(dead_code)]
     jsonrpc: String,
-    id: serde_json::Value,
+    /// Optional ID - present for requests, absent for notifications
+    #[serde(default)]
+    id: Option<serde_json::Value>,
     method: String,
     params: Option<serde_json::Value>,
 }
@@ -172,7 +174,8 @@ struct McpRequest {
 #[derive(Debug, Serialize)]
 struct McpResponse {
     jsonrpc: String,
-    id: serde_json::Value,
+    /// ID from the request - only present for requests, not notifications
+    id: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -369,10 +372,12 @@ async fn handle_mcp_request(
     context: Trading212Context,
     Json(request): Json<McpRequest>,
 ) -> Result<Json<McpResponse>, (StatusCode, String)> {
+    let is_notification = request.id.is_none();
     info!(
         method = %request.method,
         id = ?request.id,
-        "Processing MCP request"
+        is_notification = is_notification,
+        "Processing MCP message"
     );
 
     // Route based on method
@@ -389,7 +394,7 @@ async fn handle_mcp_request(
         }
     };
 
-    // Build response
+    // Build response (only for requests with an ID, not for notifications)
     match result {
         Ok(result_value) => Ok(Json(McpResponse {
             jsonrpc: "2.0".to_string(),
@@ -640,7 +645,7 @@ mod tests {
         // Create an initialize request
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
-            id: serde_json::Value::Number(1.into()),
+            id: Some(serde_json::Value::Number(1.into())),
             method: "initialize".to_string(),
             params: Some(json!({
                 "protocolVersion": "2024-11-05",
@@ -677,7 +682,7 @@ mod tests {
 
         let request = McpRequest {
             jsonrpc: "2.0".to_string(),
-            id: serde_json::Value::Number(1.into()),
+            id: Some(serde_json::Value::Number(1.into())),
             method: "unknown_method".to_string(),
             params: None,
         };
@@ -709,5 +714,39 @@ mod tests {
             let value = result.unwrap();
             assert!(value["protocolVersion"].is_string());
         }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_request_accepts_notification_without_id() {
+        // Test that notifications (messages without ID) are accepted
+        let app_state = Arc::new(AppState {
+            client: Client::new(),
+            cache: Arc::new(Trading212Cache::new().expect("Failed to create cache")),
+        });
+
+        let context = Trading212Context {
+            config: Trading212Config::new_with_api_key("test-key".to_string()),
+        };
+
+        // Create a notification (no ID)
+        let request = McpRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "initialize".to_string(),
+            params: Some(json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {}
+            })),
+        };
+
+        // Call the handler - should succeed even without ID
+        let response = handle_mcp_request(State(app_state), context, Json(request))
+            .await
+            .unwrap();
+
+        // Response should have no ID (matching the notification)
+        assert_eq!(response.0.jsonrpc, "2.0");
+        assert!(response.0.id.is_none());
+        assert!(response.0.result.is_some());
     }
 }
