@@ -367,6 +367,69 @@ async fn health_check() -> (StatusCode, Json<HealthResponse>) {
     )
 }
 
+/// Route MCP method calls to appropriate handlers
+async fn route_mcp_method(
+    method: &str,
+    params: Option<serde_json::Value>,
+    app_state: &AppState,
+    context: &Trading212Context,
+) -> Result<serde_json::Value, McpError> {
+    match method {
+        "initialize" => handle_initialize(params.as_ref()),
+        "initialized" => {
+            // This is a notification from the client confirming initialization is complete
+            info!("Client initialization confirmed");
+            Ok(serde_json::Value::Null)
+        }
+        "notifications/cancelled" => {
+            // Client cancelled a request - just acknowledge
+            info!("Request cancelled notification received");
+            Ok(serde_json::Value::Null)
+        }
+        "tools/list" => handle_list_tools(),
+        "tools/call" => handle_call_tool(app_state, context, params).await,
+        _ => {
+            warn!(method = %method, "Unknown method requested");
+            Err(McpError {
+                code: -32601,
+                message: format!("Method not found: {method}"),
+            })
+        }
+    }
+}
+
+/// Build JSON-RPC response for notifications (no meaningful response)
+fn build_notification_response(method: &str) -> Json<McpResponse> {
+    info!(method = %method, "Notification processed, no response sent");
+    Json(McpResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: None,
+    })
+}
+
+/// Build JSON-RPC response for requests (with result or error)
+fn build_request_response(
+    id: Option<serde_json::Value>,
+    result: Result<serde_json::Value, McpError>,
+) -> Json<McpResponse> {
+    match result {
+        Ok(result_value) => Json(McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(result_value),
+            error: None,
+        }),
+        Err(error) => Json(McpResponse {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }),
+    }
+}
+
 /// Handle MCP JSON-RPC requests
 async fn handle_mcp_request(
     State(app_state): State<Arc<AppState>>,
@@ -381,57 +444,14 @@ async fn handle_mcp_request(
         "Processing MCP message"
     );
 
-    // Route based on method
-    let result = match request.method.as_str() {
-        "initialize" => handle_initialize(request.params.as_ref()),
-        "initialized" => {
-            // This is a notification from the client confirming initialization is complete
-            info!("Client initialization confirmed");
-            Ok(serde_json::Value::Null)
-        }
-        "notifications/cancelled" => {
-            // Client cancelled a request - just acknowledge
-            info!("Request cancelled notification received");
-            Ok(serde_json::Value::Null)
-        }
-        "tools/list" => handle_list_tools(),
-        "tools/call" => handle_call_tool(&app_state, &context, request.params).await,
-        _ => {
-            warn!(method = %request.method, "Unknown method requested");
-            Err(McpError {
-                code: -32601,
-                message: format!("Method not found: {}", request.method),
-            })
-        }
-    };
+    // Route to appropriate handler
+    let result = route_mcp_method(&request.method, request.params, &app_state, &context).await;
 
-    // Build response - only send responses for requests (with ID), not notifications
+    // Build response - only send meaningful responses for requests (with ID), not notifications
     if is_notification {
-        // For notifications, we don't send a response
-        info!(method = %request.method, "Notification processed, no response sent");
-        // Return an empty response (Axum requires a response, but this won't be sent to client)
-        Ok(Json(McpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-        }))
+        Ok(build_notification_response(&request.method))
     } else {
-        // For requests, send the result or error
-        match result {
-            Ok(result_value) => Ok(Json(McpResponse {
-                jsonrpc: "2.0".to_string(),
-                id: request.id,
-                result: Some(result_value),
-                error: None,
-            })),
-            Err(error) => Ok(Json(McpResponse {
-                jsonrpc: "2.0".to_string(),
-                id: request.id,
-                result: None,
-                error: Some(error),
-            })),
-        }
+        Ok(build_request_response(request.id, result))
     }
 }
 
