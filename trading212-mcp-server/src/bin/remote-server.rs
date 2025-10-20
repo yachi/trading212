@@ -231,8 +231,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .layer(PropagateRequestIdLayer::new(X_REQUEST_ID.clone()))
-        // Timeout to prevent hanging requests
-        .layer(TimeoutLayer::new(Duration::from_secs(60)))
+        // Timeout to prevent hanging requests (configurable via MCP_REQUEST_TIMEOUT_SECS)
+        .layer(TimeoutLayer::new(Duration::from_secs(
+            std::env::var("MCP_REQUEST_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(120),
+        )))
         .layer(CorsLayer::permissive())
         .layer(middleware::from_fn(log_request_completion));
 
