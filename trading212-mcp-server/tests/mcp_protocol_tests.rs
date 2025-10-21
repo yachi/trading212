@@ -362,6 +362,7 @@ async fn test_real_mcp_error_handling() {
 
 /// Real integration test: Call get_all_pies_with_holdings tool via MCP protocol
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_real_mcp_call_get_pies() {
     let mock_server = MockServer::start().await;
 
@@ -398,16 +399,33 @@ async fn test_real_mcp_call_get_pies() {
                 "ticker": "AAPL_US_EQ",
                 "expectedShare": 1.0,
                 "currentShare": 1.0,
-                "ownedQuantity": 10.0
+                "ownedQuantity": 10.0,
+                "result": {
+                    "priceAvgInvestedValue": 100.0,
+                    "priceAvgValue": 110.0,
+                    "priceAvgResult": 10.0,
+                    "priceAvgResultCoef": 0.1
+                },
+                "issues": []
             }],
             "settings": {
                 "id": 12345,
                 "name": "Test Pie",
                 "icon": null,
                 "goal": null,
-                "dividendCashAction": "REINVEST"
+                "dividendCashAction": "REINVEST",
+                "creationDate": 1_704_067_200.0
             }
         })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock instruments metadata endpoint for enriching instrument names
+    Mock::given(method("GET"))
+        .and(path("/equity/metadata/instruments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"ticker": "AAPL_US_EQ", "name": "Apple Inc", "shortName": "AAPL", "type": "STOCK"}
+        ])))
         .mount(&mock_server)
         .await;
 

@@ -1122,8 +1122,8 @@ impl GetAllPiesWithHoldingsTool {
         // Fetch all pies
         let pies = Self::fetch_all_pies(client, config, cache).await?;
 
-        // Fetch detailed info for each pie
-        let detailed_pies = Self::fetch_pie_details(client, config, cache, &pies).await;
+        // Fetch detailed pie data and enrich with instrument names
+        let detailed_pies = Self::fetch_and_enrich_pies(client, config, cache, &pies).await;
 
         tracing::info!(
             total_pies = pies.len(),
@@ -1132,6 +1132,61 @@ impl GetAllPiesWithHoldingsTool {
         );
 
         create_json_response(&detailed_pies, "pies with holdings", detailed_pies.len())
+    }
+
+    /// Fetch detailed pie data and enrich with instrument names
+    async fn fetch_and_enrich_pies(
+        client: &Client,
+        config: &Trading212Config,
+        cache: &Trading212Cache,
+        pies: &[Pie],
+    ) -> Vec<serde_json::Value> {
+        // Fetch all detailed pie data first to collect tickers
+        let mut all_detailed_pies = Vec::new();
+        for pie in pies {
+            let endpoint = format!("equity/pies/{}", pie.id);
+            match cache
+                .request::<DetailedPieResponse>(client, config, &endpoint, None)
+                .await
+            {
+                Ok(details) => {
+                    all_detailed_pies.push((pie, details));
+                }
+                Err(e) => {
+                    tracing::warn!(pie_id = pie.id, error = %e, "Failed to fetch pie details");
+                }
+            }
+        }
+
+        // Collect all unique tickers across all pies
+        let all_tickers: std::collections::HashSet<String> = all_detailed_pies
+            .iter()
+            .flat_map(|(_, details)| details.instruments.iter().map(|i| i.ticker.clone()))
+            .collect();
+
+        // Fetch instrument names for all tickers in one request
+        let instruments_map =
+            Self::fetch_instruments_map(client, config, cache, &all_tickers).await;
+
+        // Build final response with enriched instruments
+        all_detailed_pies
+            .into_iter()
+            .map(|(pie, details)| {
+                let enriched_instruments =
+                    Self::enrich_instruments_with_map(&details.instruments, &instruments_map);
+
+                serde_json::json!({
+                    "id": pie.id,
+                    "cash": pie.cash,
+                    "dividendDetails": pie.dividend_details,
+                    "result": pie.result,
+                    "progress": pie.progress,
+                    "status": pie.status,
+                    "instruments": enriched_instruments,
+                    "settings": details.settings
+                })
+            })
+            .collect()
     }
 
     /// Fetch all pies from the API
@@ -1155,82 +1210,96 @@ impl GetAllPiesWithHoldingsTool {
         }
     }
 
-    /// Fetch detailed information for each pie
-    async fn fetch_pie_details(
+    /// Fetch instrument map for all tickers by loading all instruments and filtering client-side
+    async fn fetch_instruments_map(
         client: &Client,
         config: &Trading212Config,
         cache: &Trading212Cache,
-        pies: &[Pie],
-    ) -> Vec<serde_json::Value> {
-        let mut detailed_pies = Vec::new();
-
-        for pie in pies {
-            let pie_with_details = Self::fetch_single_pie_details(client, config, cache, pie).await;
-            detailed_pies.push(pie_with_details);
+        tickers: &std::collections::HashSet<String>,
+    ) -> HashMap<String, Instrument> {
+        if tickers.is_empty() {
+            return HashMap::new();
         }
 
-        detailed_pies
+        tracing::debug!(
+            ticker_count = tickers.len(),
+            "Fetching instrument data for tickers"
+        );
+
+        // Fetch ALL instruments once (will be cached for 60s)
+        // This is more efficient than using search API which returns ALL results anyway
+        let all_instruments = cache
+            .request::<Vec<Instrument>>(client, config, "equity/metadata/instruments", None)
+            .await;
+
+        match all_instruments {
+            Ok(instruments) => Self::filter_instruments(instruments, tickers),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to fetch instruments, returning without names"
+                );
+                HashMap::new()
+            }
+        }
     }
 
-    /// Fetch detailed information for a single pie
-    #[allow(clippy::cognitive_complexity)]
-    async fn fetch_single_pie_details(
-        client: &Client,
-        config: &Trading212Config,
-        cache: &Trading212Cache,
-        pie: &Pie,
-    ) -> serde_json::Value {
-        let endpoint = format!("equity/pies/{}", pie.id);
-        tracing::debug!(pie_id = pie.id, "Fetching details for pie");
+    /// Filter instruments to only those we need
+    fn filter_instruments(
+        all_instruments: Vec<Instrument>,
+        tickers: &std::collections::HashSet<String>,
+    ) -> HashMap<String, Instrument> {
+        tracing::debug!(
+            total_instruments = all_instruments.len(),
+            "Loaded all instruments, filtering to needed tickers"
+        );
 
-        match cache
-            .request::<DetailedPieResponse>(client, config, &endpoint, None)
-            .await
-        {
-            Ok(details) => {
-                tracing::debug!(pie_id = pie.id, "Successfully retrieved pie details");
-                serde_json::json!({
-                    "id": pie.id,
-                    "cash": pie.cash,
-                    "dividendDetails": pie.dividend_details,
-                    "result": pie.result,
-                    "progress": pie.progress,
-                    "status": pie.status,
-                    "instruments": details.instruments,
-                    "settings": details.settings
-                })
-            }
-            Err(e) => {
-                // Provide more granular error logging for different failure modes
-                let error_type = match &e {
-                    Trading212Error::ApiError { status, .. } if *status == 429 => "rate_limit",
-                    Trading212Error::ApiError { status, .. } if *status == 404 => "not_found",
-                    Trading212Error::ApiError { status, .. } if *status >= 500 => "server_error",
-                    Trading212Error::ApiError { .. } => "api_error",
-                    Trading212Error::RequestFailed { .. } => "network_error",
-                    Trading212Error::ParseError { .. } => "parse_error",
-                    _ => "unknown_error",
-                };
+        let filtered: HashMap<String, Instrument> = all_instruments
+            .into_iter()
+            .filter(|inst| tickers.contains(&inst.ticker))
+            .map(|inst| (inst.ticker.clone(), inst))
+            .collect();
 
-                tracing::warn!(
-                    pie_id = pie.id,
-                    error = %e,
-                    error_type = error_type,
-                    "Failed to retrieve details for pie, returning partial data"
-                );
-                serde_json::json!({
-                    "id": pie.id,
-                    "cash": pie.cash,
-                    "dividendDetails": pie.dividend_details,
-                    "result": pie.result,
-                    "progress": pie.progress,
-                    "status": pie.status,
-                    "instruments": null,
-                    "settings": null,
-                    "error": format!("Failed to fetch holdings: {}", e)
-                })
-            }
-        }
+        tracing::info!(
+            requested_count = tickers.len(),
+            found_count = filtered.len(),
+            "Successfully fetched and filtered instrument names"
+        );
+
+        filtered
+    }
+
+    /// Enrich pie instruments with names using pre-fetched instrument map
+    fn enrich_instruments_with_map(
+        instruments: &[PieInstrument],
+        instruments_map: &HashMap<String, Instrument>,
+    ) -> Vec<serde_json::Value> {
+        instruments
+            .iter()
+            .map(|pie_inst| {
+                let mut json = serde_json::to_value(pie_inst).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        ticker = %pie_inst.ticker,
+                        error = %e,
+                        "Failed to serialize instrument"
+                    );
+                    serde_json::Value::Null
+                });
+
+                // Add name if we found it
+                if let Some(instrument) = instruments_map.get(&pie_inst.ticker) {
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.insert("name".to_string(), serde_json::json!(instrument.name));
+                        obj.insert(
+                            "shortName".to_string(),
+                            serde_json::json!(instrument.short_name),
+                        );
+                    }
+                }
+
+                json
+            })
+            .collect()
     }
 }
 
@@ -1842,6 +1911,7 @@ mod tests {
         }
 
         #[tokio::test]
+        #[allow(clippy::too_many_lines)]
         async fn test_get_all_pies_with_holdings_partial_failure() {
             use serde_json::json;
 
@@ -1898,8 +1968,20 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/equity/pies/101"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "instruments": [{"ticker": "AAPL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 10.0}],
-                    "settings": {"id": 101, "name": "Pie 1", "icon": "chart", "goal": null, "dividendCashAction": "REINVEST"}
+                    "instruments": [{
+                        "ticker": "AAPL_US_EQ",
+                        "expectedShare": 1.0,
+                        "currentShare": 1.0,
+                        "ownedQuantity": 10.0,
+                        "result": {
+                            "priceAvgInvestedValue": 100.0,
+                            "priceAvgValue": 110.0,
+                            "priceAvgResult": 10.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "issues": []
+                    }],
+                    "settings": {"id": 101, "name": "Pie 1", "icon": "chart", "goal": null, "dividendCashAction": "REINVEST", "creationDate": 1_704_067_200.0}
                 })))
                 .mount(&mock_server)
                 .await;
@@ -1917,9 +1999,31 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/equity/pies/103"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "instruments": [{"ticker": "GOOGL_US_EQ", "expectedShare": 1.0, "currentShare": 1.0, "ownedQuantity": 5.0}],
-                    "settings": {"id": 103, "name": "Pie 3", "icon": "rocket", "goal": 1000.0, "dividendCashAction": "REINVEST"}
+                    "instruments": [{
+                        "ticker": "GOOGL_US_EQ",
+                        "expectedShare": 1.0,
+                        "currentShare": 1.0,
+                        "ownedQuantity": 5.0,
+                        "result": {
+                            "priceAvgInvestedValue": 200.0,
+                            "priceAvgValue": 220.0,
+                            "priceAvgResult": 20.0,
+                            "priceAvgResultCoef": 0.1
+                        },
+                        "issues": []
+                    }],
+                    "settings": {"id": 103, "name": "Pie 3", "icon": "rocket", "goal": 1000.0, "dividendCashAction": "REINVEST", "creationDate": 1_704_153_600.0}
                 })))
+                .mount(&mock_server)
+                .await;
+
+            // Mock instruments metadata endpoint for enriching instrument names
+            Mock::given(method("GET"))
+                .and(path("/equity/metadata/instruments"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"ticker": "AAPL_US_EQ", "name": "Apple Inc", "shortName": "AAPL", "type": "STOCK"},
+                    {"ticker": "GOOGL_US_EQ", "name": "Alphabet Inc Class A", "shortName": "GOOGL", "type": "STOCK"}
+                ])))
                 .mount(&mock_server)
                 .await;
 
@@ -1943,11 +2047,17 @@ mod tests {
             let response = result.unwrap();
             assert!(!response.content.is_empty(), "Response should have content");
 
-            // Verify the response mentions all 3 pies by checking the debug representation
+            // Verify the response contains 2 successful pies (101 and 103, not 102 which failed)
             let response_text = format!("{:?}", response);
             assert!(
-                response_text.contains("3 pies") || response_text.contains("\"id\": 101"),
-                "Should report all 3 pies in response"
+                response_text.contains("2 pies")
+                    || (response_text.contains("101") && response_text.contains("103")),
+                "Should report 2 successful pies in response"
+            );
+            // Verify that pie 102 is NOT in the response (it failed)
+            assert!(
+                !response_text.contains("102"),
+                "Failed pie should not be in response"
             );
         }
 
