@@ -29,10 +29,10 @@ const PIES_RATE_LIMIT_SECS: u64 = 2; // Shared by get_pies and get_pie_by_id (co
 const ACCOUNT_RATE_LIMIT_SECS: u64 = 30;
 const ORDERS_RATE_LIMIT_SECS: u64 = 5;
 
-// Cache TTLs with buffer over rate limits
-const INSTRUMENTS_CACHE_TTL_SECS: u64 = 60; // 60s TTL for 50s rate limit
-const PIES_CACHE_TTL_SECS: u64 = 40; // 40s TTL for 30s rate limit
-const DETAIL_CACHE_TTL_SECS: u64 = 15; // 15s TTL for 5s rate limit
+// Cache TTLs - generous to avoid re-fetching during rate-limited batch operations
+const INSTRUMENTS_CACHE_TTL_SECS: u64 = 300; // 5 min - instrument metadata rarely changes
+const PIES_CACHE_TTL_SECS: u64 = 300; // 5 min - pie list/details rarely change mid-session
+const DETAIL_CACHE_TTL_SECS: u64 = 300; // 5 min - pie details must survive batch fetches (7+ pies × 5s rate limit = 35s+)
 
 // Maximum time to wait for rate limit reset (prevent indefinite hangs)
 const MAX_RATE_LIMIT_WAIT_SECS: u64 = 300; // 5 minutes
