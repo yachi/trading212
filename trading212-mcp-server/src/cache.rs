@@ -535,7 +535,7 @@ mod tests {
         let cache = Trading212Cache::new().expect("Failed to create cache");
 
         // Test that cache was created successfully
-        assert!(cache.instruments_cache.entry_count() == 0);
+        assert_eq!(cache.instruments_cache.entry_count(), 0);
     }
 
     #[test]

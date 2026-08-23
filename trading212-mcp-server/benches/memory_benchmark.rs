@@ -70,7 +70,7 @@ fn calculate_avg_instrument_size(sample_json: &str) -> usize {
             // Calculate average JSON size per instrument
             let total_size: usize = sample
                 .iter()
-                .map(|inst| serde_json::to_string(inst).map(|s| s.len()).unwrap_or(200))
+                .map(|inst| serde_json::to_string(inst).map_or(200, |s| s.len()))
                 .sum();
 
             let avg_size = total_size / sample_size;

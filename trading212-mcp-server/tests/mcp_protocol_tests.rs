@@ -37,9 +37,7 @@ struct McpServerProcess {
 
 impl McpServerProcess {
     /// Start the MCP server as a subprocess with mocked Trading212 API
-    async fn start_with_mock_api(
-        mock_server_uri: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn start_with_mock_api(mock_server_uri: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Create temp directory for API key
         let temp_dir = TempDir::new()?;
         let api_key_path = temp_dir.path().join(".trading212-api-key");
@@ -110,7 +108,6 @@ async fn test_real_mcp_initialize() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Send initialize request
@@ -150,7 +147,6 @@ async fn test_real_mcp_list_tools() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -241,7 +237,6 @@ async fn test_real_mcp_call_get_instruments() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -315,7 +310,6 @@ async fn test_real_mcp_error_handling() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -430,7 +424,6 @@ async fn test_real_mcp_call_get_pies() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -527,7 +520,6 @@ async fn test_real_mcp_call_update_pie() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -597,7 +589,6 @@ async fn test_real_mcp_invalid_tool() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
