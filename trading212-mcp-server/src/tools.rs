@@ -19,6 +19,10 @@
 //!
 //! The module is tested with comprehensive mutation testing via GitHub Actions.
 
+// The `tool_box!` macro from rust-mcp-sdk generates an enum whose variants all end
+// in `Tool`. The attribute cannot go on the macro invocation (it would be ignored),
+// so the lint is allowed for this module.
+#![allow(clippy::enum_variant_names)]
 #![allow(missing_docs)] // Allow missing docs for JsonSchema generated code
 
 use reqwest::Client;
@@ -1580,6 +1584,8 @@ impl CreatePieTool {
     }
 }
 
+// Variant names come from the third-party `tool_box!` macro (see the module-level
+// allow above) -- the shared `Tool` postfix is not ours to rename.
 tool_box! {
     Trading212Tools,
     [GetInstrumentsTool, GetAllPiesWithHoldingsTool, UpdatePieTool, CreatePieTool]
@@ -1694,7 +1700,7 @@ mod tests {
 
             assert!(result.is_ok());
             let response = result.unwrap();
-            assert!(response.content.len() == 1);
+            assert_eq!(response.content.len(), 1);
         }
 
         #[tokio::test]
