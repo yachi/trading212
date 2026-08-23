@@ -1,0 +1,38 @@
+name: Financial Data Scan
+
+# This repo is public and portfolio position values have reached a commit here
+# before. The same scan runs in .githooks/pre-commit, but that is opt-in per
+# clone (it needs `git config core.hooksPath .githooks`), so this job is the
+# copy that cannot be skipped.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Financial Data Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan changes for personal financial data
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base ref (new branch or first push); scanning the last commit only."
+            BASE="$HEAD^"
+          fi
+          echo "Scanning $BASE..$HEAD"
+          ./.githooks/scan-financial.sh "$BASE" "$HEAD"
