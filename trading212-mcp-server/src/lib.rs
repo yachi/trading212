@@ -13,6 +13,20 @@ use criterion as _;
 #[cfg(test)]
 use cargo_husky as _;
 
+// HTTP server dependencies (only used by remote-server binary)
+#[cfg(feature = "http-server")]
+use axum as _;
+#[cfg(feature = "http-server")]
+use axum_extra as _;
+#[cfg(feature = "http-server")]
+use headers as _;
+#[cfg(feature = "http-server")]
+use hyper as _;
+#[cfg(feature = "http-server")]
+use tower as _;
+#[cfg(feature = "http-server")]
+use tower_http as _;
+
 pub mod cache;
 pub mod config;
 pub mod errors;

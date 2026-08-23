@@ -37,9 +37,7 @@ struct McpServerProcess {
 
 impl McpServerProcess {
     /// Start the MCP server as a subprocess with mocked Trading212 API
-    async fn start_with_mock_api(
-        mock_server_uri: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn start_with_mock_api(mock_server_uri: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Create temp directory for API key
         let temp_dir = TempDir::new()?;
         let api_key_path = temp_dir.path().join(".trading212-api-key");
@@ -110,7 +108,6 @@ async fn test_real_mcp_initialize() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Send initialize request
@@ -150,7 +147,6 @@ async fn test_real_mcp_list_tools() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -200,9 +196,9 @@ async fn test_real_mcp_list_tools() {
     let tool_names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
     assert!(tool_names.contains(&"get_instruments"));
-    assert!(tool_names.contains(&"get_pies"));
-    assert!(tool_names.contains(&"get_pie_by_id"));
+    assert!(tool_names.contains(&"get_all_pies_with_holdings"));
     assert!(tool_names.contains(&"update_pie"));
+    assert!(tool_names.contains(&"create_pie"));
 }
 
 /// Real integration test: Call get_instruments tool via MCP protocol with client-side filtering
@@ -241,7 +237,6 @@ async fn test_real_mcp_call_get_instruments() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -315,7 +310,6 @@ async fn test_real_mcp_error_handling() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -360,12 +354,13 @@ async fn test_real_mcp_error_handling() {
     // Debug: Print the actual response\n    println!("Test response: {}", serde_json::to_string_pretty(&response).unwrap());\n    \n    // Check if response contains error information (either as JSON-RPC error or as tool result with error content)\n    let has_error = response["error"].is_object() || \n        (response["result"].is_object() && \n         response["result"]["content"].is_array() && \n         !response["result"]["content"].as_array().unwrap().is_empty());\n    assert!(has_error, "Response should contain error information");
 }
 
-/// Real integration test: Call get_pies tool via MCP protocol
+/// Real integration test: Call get_all_pies_with_holdings tool via MCP protocol
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_real_mcp_call_get_pies() {
     let mock_server = MockServer::start().await;
 
-    // Mock successful pies response
+    // Mock successful pies list response
     Mock::given(method("GET"))
         .and(path("/equity/pies"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
@@ -390,8 +385,45 @@ async fn test_real_mcp_call_get_pies() {
         .mount(&mock_server)
         .await;
 
+    // Mock pie details response
+    Mock::given(method("GET"))
+        .and(path("/equity/pies/12345"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "instruments": [{
+                "ticker": "AAPL_US_EQ",
+                "expectedShare": 1.0,
+                "currentShare": 1.0,
+                "ownedQuantity": 10.0,
+                "result": {
+                    "priceAvgInvestedValue": 100.0,
+                    "priceAvgValue": 110.0,
+                    "priceAvgResult": 10.0,
+                    "priceAvgResultCoef": 0.1
+                },
+                "issues": []
+            }],
+            "settings": {
+                "id": 12345,
+                "name": "Test Pie",
+                "icon": null,
+                "goal": null,
+                "dividendCashAction": "REINVEST",
+                "creationDate": 1_704_067_200.0
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock instruments metadata endpoint for enriching instrument names
+    Mock::given(method("GET"))
+        .and(path("/equity/metadata/instruments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"ticker": "AAPL_US_EQ", "name": "Apple Inc", "shortName": "AAPL", "type": "STOCK"}
+        ])))
+        .mount(&mock_server)
+        .await;
+
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -414,13 +446,13 @@ async fn test_real_mcp_call_get_pies() {
         .await
         .expect("Initialize failed");
 
-    // Call get_pies tool
+    // Call get_all_pies_with_holdings tool
     let call_tool_request = json!({
         "jsonrpc": "2.0",
         "id": 5,
         "method": "tools/call",
         "params": {
-            "name": "get_pies",
+            "name": "get_all_pies_with_holdings",
             "arguments": {}
         }
     });
@@ -441,10 +473,10 @@ async fn test_real_mcp_call_get_pies() {
     let content = result["content"].as_array().unwrap();
     assert!(!content.is_empty());
 
-    // Verify the content contains the expected pie data
+    // Verify the content contains the expected pie data with holdings
     let content_text = content[0]["text"].as_str().unwrap();
     assert!(content_text.contains("12345"));
-    assert!(content_text.contains("1 investment pies"));
+    assert!(content_text.contains("pies with holdings"));
 }
 
 /// Real integration test: Update pie tool via MCP protocol
@@ -488,7 +520,6 @@ async fn test_real_mcp_call_update_pie() {
         .await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first
@@ -558,7 +589,6 @@ async fn test_real_mcp_invalid_tool() {
     let mock_server = MockServer::start().await;
 
     let mut server_process = McpServerProcess::start_with_mock_api(&mock_server.uri())
-        .await
         .expect("Failed to start MCP server");
 
     // Initialize first

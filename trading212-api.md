@@ -24,19 +24,25 @@ Different endpoints require specific scopes:
 
 ## Rate Limiting
 
-Trading212 enforces strict rate limits per endpoint:
+Trading212 enforces strict rate limits **per account** (not per endpoint):
 
 | Endpoint | Rate Limit | Notes |
 |----------|------------|-------|
 | `/equity/metadata/instruments` | **1 request per 50 seconds** | Strictest limit - use pagination |
 | `/account` | 1 request per 30 seconds | Account information |
 | `/account/cash` | 1 request per 2 seconds | Cash balance |
-| `/equity/pies` | 1 request per 30 seconds | Investment pies list |
-| `/equity/pies/{pieId}` | 1 request per 5 seconds | Pie details |
+| `/equity/pies` | 1 request per 1 second | Shared limit with pie details |
+| `/equity/pies/{pieId}` | 1 request per 1 second | Shared limit with pies list |
 | `/equity/orders` | 1 request per 5 seconds | Orders |
 | `/equity/portfolio` | 1 request per 5 seconds | Portfolio data |
 
-**Important:** The MCP server includes **automatic rate limiting** for all endpoints. It will automatically wait between requests to respect Trading212's limits, preventing 429 errors completely.
+**Important:**
+- The MCP server includes **automatic rate limiting** that respects Trading212's `x-ratelimit-reset` headers
+- **Pie endpoints share a rate limiter** because Trading212's limits apply per-account, not per-endpoint
+- The server reads the `x-ratelimit-remaining` and `x-ratelimit-reset` response headers and waits until the exact reset time when limits are exhausted
+- Base rate limiter: 2 seconds between requests (conservative buffer on top of Trading212's 1/1s limit)
+- When `x-ratelimit-remaining=0`, the server automatically waits until `x-ratelimit-reset` timestamp before the next request
+- This prevents 429 errors completely while maximizing throughput
 
 ## Endpoints
 

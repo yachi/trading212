@@ -1,7 +1,7 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
+# Note: Cargo.lock IS committed for binary crates (this project has bin/remote-server.rs)
 
 # IDE
 .vscode/
