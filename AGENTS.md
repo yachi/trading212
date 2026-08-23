@@ -21,6 +21,24 @@ Code quality is enforced through automated checks:
 9. **Dependency hygiene**: Run `cargo machete` to identify unused dependencies
 10. **Conventional commits**: Use conventional commit message
 
+## Git Hooks
+
+This repo keeps its hooks in `.githooks/` so they are versioned and shared. Git does
+not pick that up automatically — `core.hooksPath` is local to each clone, so run this
+once after cloning:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` does two things:
+
+1. **Blocks personal financial data.** This repo is public. Staged lines matching
+   `valueGBP`, `pie_id=<n>`, or book-total phrasing are rejected, because portfolio
+   position values have been committed here by accident before. Override for a false
+   positive with `ALLOW_FINANCIAL=1 git commit ...`.
+2. **Runs `cargo fmt --check`.** Clippy, tests, and compilation run in CI instead.
+
 ## Code Review Session
 
 ### Pre-review Setup:
