@@ -33,11 +33,29 @@ git config core.hooksPath .githooks
 
 `.githooks/pre-commit` does two things:
 
-1. **Blocks personal financial data.** This repo is public. Staged lines matching
-   `valueGBP`, `pie_id=<n>`, or book-total phrasing are rejected, because portfolio
-   position values have been committed here by accident before. Override for a false
-   positive with `ALLOW_FINANCIAL=1 git commit ...`.
+1. **Blocks personal financial data.** This repo is public, and portfolio position
+   values have reached a commit here before. Override a false positive with
+   `ALLOW_FINANCIAL=1 git commit ...`.
 2. **Runs `cargo fmt --check`.** Clippy, tests, and compilation run in CI instead.
+
+## Financial Data Scan
+
+The financial check is not only a hook. The same scanner runs as a required-capable
+CI job, so it applies even to clones that never set `core.hooksPath`:
+
+| Piece | Role |
+|---|---|
+| `.githooks/financial-patterns.txt` | the single pattern definition |
+| `.githooks/scan-financial.sh` | the scanner, used by both hook and CI |
+| `.github/workflows/financial-data-scan.yml` | runs it over the PR diff |
+
+Add new patterns to the `.txt` file only — both consumers read it, so there is no
+second copy to drift. The scanner fails closed: an empty pattern file is an error, not
+a silent pass.
+
+`.githooks/*`, `AGENTS.md`, and the workflow are exempt from the scan, since each must
+quote the patterns to define, document, or search for them. Review changes to those by
+eye.
 
 ## Code Review Session
 

@@ -1,0 +1,15 @@
+# Patterns that indicate live personal financial data.
+#
+# One POSIX extended regex per line. Blank lines and # comments are ignored.
+# Read by .githooks/scan-financial.sh, which both the pre-commit hook and the
+# financial-data-scan CI job use -- keep this the single definition so the two
+# cannot drift apart.
+#
+# This repo is PUBLIC and portfolio position values have reached a commit here
+# before. Add a pattern when a new shape of account data shows up.
+
+valueGBP
+pie_id[[:space:]]*=[[:space:]]*[0-9]
+Book £
+book value
+starting cash
