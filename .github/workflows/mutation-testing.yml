@@ -30,15 +30,21 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          # This action defaults RUSTFLAGS to "-D warnings"; dtolnay/rust-toolchain
+          # (used here previously) did not. cargo-mutants compiles many mutated
+          # variants that legitimately warn, so denying warnings would fail those
+          # builds and inflate the mutation score. Keep RUSTFLAGS unset.
+          rustflags: ""
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -47,7 +53,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('trading212-mcp-server/Cargo.lock') }}
 
       - name: Cache cargo-mutants binary
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/cargo-mutants
           key: cargo-mutants-25.3.1-${{ runner.os }}
@@ -108,7 +114,7 @@ jobs:
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const fs = require('fs');
