@@ -1,1 +1,11 @@
 .env
+.DS_Store
+
+# Tooling scratch output
+.playwright-mcp/
+
+# Local portfolio analysis scratch dir.
+# Contains live position values, pie IDs, and book totals — this repo is PUBLIC.
+# Already-tracked files here stay tracked; new ones need an explicit `git add -f`
+# and a read-through for personal financial data first.
+analysis/
