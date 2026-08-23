@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+echo "🔍 Running pre-commit formatting check for Trading212 MCP Server..."
+
+# --- Personal financial data guard -------------------------------------------
+# This repo is PUBLIC. Block staged content that looks like live account state
+# (position values, pie IDs, book totals). Override: ALLOW_FINANCIAL=1 git commit
+if [ "${ALLOW_FINANCIAL:-0}" != "1" ]; then
+    echo "🔒 Scanning staged changes for personal financial data..."
+    PATTERN='valueGBP|pie_id[[:space:]]*=[[:space:]]*[0-9]|Book £|book value|starting cash'
+    # The hook and AGENTS.md necessarily quote these patterns to define and
+    # document them, so they would always match themselves. They are exempt;
+    # review changes to them by eye.
+    if git diff --cached -U0 --diff-filter=ACM \
+        -- . ':(exclude).githooks/*' ':(exclude)AGENTS.md' \
+        | grep -E '^\+[^+]' \
+        | grep -inE "$PATTERN"; then
+        echo ""
+        echo "❌ Staged lines above look like live portfolio data, and this repo is public."
+        echo "   Scrub them, or re-run with: ALLOW_FINANCIAL=1 git commit ..."
+        exit 1
+    fi
+    echo "✅ No personal financial data in staged changes."
+fi
+
+
+# Change to the mcp-server directory
+cd "$(git rev-parse --show-toplevel)/trading212-mcp-server"
+
+# Check if we're in a Rust project
+if [ ! -f "Cargo.toml" ]; then
+    echo "❌ Cargo.toml not found in trading212-mcp-server directory"
+    exit 1
+fi
+
+echo "📝 Running cargo fmt --check..."
+if ! cargo fmt -- --check; then
+    echo "❌ Code formatting issues found. Run 'cargo fmt' to fix them."
+    exit 1
+fi
+
+echo "✅ Formatting check passed! (Tests, clippy, and compilation checks now run in CI)"
